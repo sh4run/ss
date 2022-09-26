@@ -32,6 +32,9 @@ void free_acl(void);
 int acl_match_host(const char *ip);
 int acl_add_ip(const char *ip);
 int acl_remove_ip(const char *ip);
+int acl_add_white_list_ip(const char *ip);
+int acl_remove_white_list_ip(const char *ip);
+
 
 int get_acl_mode(void);
 

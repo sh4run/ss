@@ -53,6 +53,8 @@ static struct ip_set outbound_block_list_ipv4;
 static struct ip_set outbound_block_list_ipv6;
 static struct cork_dllist outbound_block_list_rules;
 
+static char acl_cfg_name[128];
+
 static void
 parse_addr_cidr(const char *str, char *host, int *cidr)
 {
@@ -100,10 +102,6 @@ trimwhitespace(char *str)
 int
 init_acl(const char *path)
 {
-    if (path == NULL) {
-        return -1;
-    }
-
     // initialize ipset
     ipset_init_library();
 
@@ -118,6 +116,15 @@ init_acl(const char *path)
     cork_dllist_init(&white_list_rules);
     cork_dllist_init(&outbound_block_list_rules);
 
+    /*
+     * Return an empty acl in BLACK_LIST mode if
+     * no config is specified.
+     */
+    if (path == NULL) {
+        acl_mode = BLACK_LIST;
+        return 0;
+    }
+
     struct ip_set *list_ipv4  = &black_list_ipv4;
     struct ip_set *list_ipv6  = &black_list_ipv6;
     struct cork_dllist *rules = &black_list_rules;
@@ -127,6 +134,7 @@ init_acl(const char *path)
         LOGE("Invalid acl path.");
         return -1;
     }
+    strncpy(acl_cfg_name, path, sizeof(acl_cfg_name)-1);
 
     char buf[MAX_HOSTNAME_LEN];
 
@@ -304,6 +312,18 @@ acl_add_ip(const char *ip)
         ipset_ipv6_add(&black_list_ipv6, &(addr.ip.v6));
     }
 
+    /*
+     * TODO: add the new IP to BLACK_LIST section. 
+     */
+    if (acl_cfg_name[0]) {
+        char cmdline[256];
+        snprintf(cmdline, sizeof(cmdline), "echo \"%s\" >> %s",
+                 ip, acl_cfg_name);
+        if (system(cmdline)) {
+            LOGE("not able to do: %s", cmdline);
+        }
+    }
+
     return 0;
 }
 
@@ -320,6 +340,42 @@ acl_remove_ip(const char *ip)
         ipset_ipv4_remove(&black_list_ipv4, &(addr.ip.v4));
     } else if (addr.version == 6) {
         ipset_ipv6_remove(&black_list_ipv6, &(addr.ip.v6));
+    }
+
+    return 0;
+}
+
+int
+acl_add_white_list_ip(const char *ip)
+{
+    struct cork_ip addr;
+    int err = cork_ip_init(&addr, ip);
+    if (err) {
+        return -1;
+    }
+
+    if (addr.version == 4) {
+        ipset_ipv4_add(&white_list_ipv4, &(addr.ip.v4));
+    } else if (addr.version == 6) {
+        ipset_ipv6_add(&white_list_ipv6, &(addr.ip.v6));
+    }
+
+    return 0;
+}
+
+int
+acl_remove_white_list_ip(const char *ip)
+{
+    struct cork_ip addr;
+    int err = cork_ip_init(&addr, ip);
+    if (err) {
+        return -1;
+    }
+
+    if (addr.version == 4) {
+        ipset_ipv4_remove(&white_list_ipv4, &(addr.ip.v4));
+    } else if (addr.version == 6) {
+        ipset_ipv6_remove(&white_list_ipv6, &(addr.ip.v6));
     }
 
     return 0;

@@ -93,6 +93,7 @@ typedef struct server {
 #ifdef USE_NFCONNTRACK_TOS
     struct dscptracker *tracker;
 #endif
+    char peer_name[32];
 } server_t;
 
 typedef struct query {

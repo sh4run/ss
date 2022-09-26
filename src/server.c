@@ -146,6 +146,7 @@ static int server_conn = 0;
 static char *plugin       = NULL;
 static char *remote_port  = NULL;
 static char *manager_addr = NULL;
+static char *ext_validate_rt = NULL;
 uint64_t tx               = 0;
 uint64_t rx               = 0;
 
@@ -496,6 +497,9 @@ report_addr(int fd, const char *info)
     peer_name = get_peer_name(fd);
     if (peer_name != NULL) {
         LOGE("failed to handshake with %s: %s", peer_name, info);
+        if (acl) {
+            acl_add_ip(peer_name);
+        }
     }
 
 #ifdef USE_NFTABLES
@@ -960,7 +964,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             // continue to wait for recv
             return;
         } else {
-            ERROR("server recv");
+            if (verbose) {
+                char output[64];
+                snprintf(output, sizeof(output)-1, "server(%s) recv", 
+                         server->peer_name);
+                ERROR(output);
+            }
             close_and_free_remote(EV_A_ remote);
             close_and_free_server(EV_A_ server);
             return;
@@ -1360,7 +1369,12 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
             // continue to wait for recv
             return;
         } else {
-            ERROR("remote recv");
+            if (verbose) {
+                char output[64];
+                snprintf(output, sizeof(output)-1,
+                         "remote(%s) recv", server->peer_name);
+                ERROR(output);
+            }
             close_and_free_remote(EV_A_ remote);
             close_and_free_server(EV_A_ server);
             return;
@@ -1685,11 +1699,12 @@ close_and_free_server(EV_P_ server_t *server)
         ev_io_stop(EV_A_ & server->recv_ctx->io);
         ev_timer_stop(EV_A_ & server->recv_ctx->watcher);
         close(server->fd);
-        free_server(server);
         if (verbose) {
             server_conn--;
-            LOGI("close a connection from client, %d opened client connections", server_conn);
+            LOGI("close a connection from %s, %d open", 
+                 server->peer_name,  server_conn);
         }
+        free_server(server);
     }
 }
 
@@ -1700,7 +1715,7 @@ signal_cb(EV_P_ ev_signal *w, int revents)
         switch (w->signum) {
 #ifndef __MINGW32__
         case SIGCHLD:
-            if (!is_plugin_running()) {
+            if (plugin && !is_plugin_running()) {
                 LOGE("plugin service exit unexpectedly");
                 ret_val = -1;
             } else
@@ -1744,6 +1759,8 @@ plugin_watcher_cb(EV_P_ ev_io *w, int revents)
 static void
 accept_cb(EV_P_ ev_io *w, int revents)
 {
+    int allowed = 0, failed = 0;
+    int acl_mode, acl_rtn;
     listen_ctx_t *listener = (listen_ctx_t *)w;
     int serverfd           = accept(listener->fd, NULL, NULL);
     if (serverfd == -1) {
@@ -1754,11 +1771,44 @@ accept_cb(EV_P_ ev_io *w, int revents)
     char *peer_name = get_peer_name(serverfd);
     if (peer_name != NULL) {
         if (acl) {
-            if ((get_acl_mode() == BLACK_LIST && acl_match_host(peer_name) == 1)
-                || (get_acl_mode() == WHITE_LIST && acl_match_host(peer_name) >= 0)) {
+            acl_mode = get_acl_mode();
+            acl_rtn = acl_match_host(peer_name);
+            if (acl_rtn == -1) {
+                allowed = 1;
+            } else if ((acl_rtn == 1) ||
+                      (acl_rtn == 0 && acl_mode == WHITE_LIST)) {
                 LOGE("Access denied from %s", peer_name);
-                close(serverfd);
-                return;
+                /*
+                 * Silently drop any further data. This is to
+                 * keep the same behavior as that when dup salt
+                 * is found in aead.
+                 */
+                failed = 1;
+            }
+        }
+        if (!failed) {
+            /*
+             * Skip ext validation if ACL is in WHITE_LIST mode.
+             */
+            if (!allowed && ext_validate_rt) {
+                char cmdline[128];
+                snprintf(cmdline, 127, "%s %s", ext_validate_rt, peer_name);
+                int rtn = system(cmdline);
+                /*
+                 * Add peer into black list or white list.
+                 * No more external validation for this IP.
+                 */
+                if (rtn) {
+                    LOGI("Ext-Validation failed for %s(%d)", peer_name, rtn);
+                    if (acl) {
+                        acl_add_ip(peer_name);
+                    }
+                    failed = 1;
+                } else {
+                    if (acl) {
+                        acl_add_white_list_ip(peer_name);
+                    }
+                }
             }
         }
     }
@@ -1780,6 +1830,22 @@ accept_cb(EV_P_ ev_io *w, int revents)
     setnonblocking(serverfd);
 
     server_t *server = new_server(serverfd, listener);
+    if (!server) {
+        /* should not happen. just in case.  */
+        LOGE("Not able to create server for %s", peer_name);
+        close(serverfd);
+        return;
+    }
+
+    /*
+     * save the peer info for logging purpose.
+     */
+    strncpy(server->peer_name, peer_name, sizeof(server->peer_name) - 1);
+
+    if (failed) {
+        /* stop server to silently drop any packet */
+        stop_server(EV_A_ server);
+    }
     ev_io_start(EV_A_ & server->recv_ctx->io);
     ev_timer_start(EV_A_ & server->recv_ctx->watcher);
 }
@@ -2060,6 +2126,26 @@ main(int argc, char **argv)
         if (acl == 0 && conf->acl != NULL) {
             LOGI("initializing acl...");
             acl = !init_acl(conf->acl);
+        }
+        /*
+         * TODO: external_validation is only supported in config.json.
+         *       CLI arg support is not available at this moment.
+         */
+        if (!ext_validate_rt && conf->ext_validate_rt) {
+            ext_validate_rt = conf->ext_validate_rt;
+            /* check whether this routine is executable */
+            struct stat sb;
+            if (strlen(ext_validate_rt) > 80) {
+                LOGE("Unable to install external routine(too long).");
+            } else if ((stat(ext_validate_rt, &sb) == 0) && (sb.st_mode & S_IXUSR)) {
+                LOGI("External validation(%s) installed.", ext_validate_rt);
+                if (!acl) {
+                    acl = !init_acl(NULL);
+                }
+            } else {
+                LOGE("Unable to install %s(%x).", ext_validate_rt, sb.st_mode);
+                ext_validate_rt[0] = 0;
+            }
         }
     }
 

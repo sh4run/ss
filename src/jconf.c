@@ -367,6 +367,8 @@ read_jconf(const char *file)
                 conf.acl = to_string(value);
             } else if (strcmp(name, "manager_address") == 0) {
                 conf.manager_address = to_string(value);
+            } else if (strcmp(name, "external_validation") == 0) {
+                conf.ext_validate_rt = to_string(value);
             }
         }
     } else {
