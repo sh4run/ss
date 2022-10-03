@@ -3,6 +3,10 @@
 
 # IP Geolocation Based Filtering
 
+**Unfortunately, the fact is, even with this extension, the test instance is still blocked by GFW in its grand operation.**
+
+**It appears that the key point is how to avoid recceiving probes/replays, instead of how to handle them properly.**
+
 ## Intro
 
 Probes and replays from GFW are threats a shadowsocks instance has to face every day. This feature introduces a new mechanism to filter out those malicious packets. Tests show GFW uses IP addresses all around China as source in those probes and replays. This is an effective method to undermine any blacklist at shadowsocks side. But this also gives a good chance to screen most of them based on IP geolocation if geolocation of the actual client is known for certain. 
