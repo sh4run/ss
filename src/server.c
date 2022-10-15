@@ -976,6 +976,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         }
     }
 
+    LOGI("%s: %ld", __FUNCTION__, r); 
     // Ignore any new packet if the server is stopped
     if (server->stage == STAGE_STOP) {
         return;
