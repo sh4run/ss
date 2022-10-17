@@ -73,6 +73,14 @@ struct dscptracker {
 
 struct query;
 
+typedef struct client_info {
+    uint64_t  client_id;
+    uint32_t  epoch;
+    uint8_t   data_type;
+    uint8_t   pad_type;
+    uint8_t   pad2_len;
+} client_info_t;
+
 typedef struct server {
     int fd;
     int stage;
@@ -94,6 +102,8 @@ typedef struct server {
     struct dscptracker *tracker;
 #endif
     char peer_name[32];
+    client_info_t *client;
+    int  recv_len;
 } server_t;
 
 typedef struct query {

@@ -78,4 +78,19 @@ enum {
     GETOPT_VAL_NFTABLES_SETS
 };
 
+#define PAD_MAX_LEN  255
+
+typedef struct session_head {
+    uint64_t  client_id;
+    uint64_t  device_id;
+    uint32_t  epoch;
+    uint8_t   data_type;
+    uint8_t   pad_type;
+    uint8_t   pad2_len;
+    uint8_t   reserve;
+} session_head_t;
+
+#define htonll(x) ((1==htonl(1)) ? (x) : ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
+#define ntohll(x) ((1==ntohl(1)) ? (x) : ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
+
 #endif // _COMMON_H

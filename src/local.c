@@ -163,6 +163,57 @@ setnonblocking(int fd)
 
 #endif
 
+#include <sys/random.h>
+#include <systemd/sd-id128.h>
+
+static int shadow_x = 146;
+static uint64_t client_id;  // should go to remote_t
+static uint64_t device_id;
+
+static char scramble_data[40000];
+static int scramble_data_idx = -1;
+
+static void init_scramble_data(void)
+{
+    int ret;
+    ret = getrandom(scramble_data, sizeof(scramble_data), 0);
+    if (ret != sizeof(scramble_data)) {
+        LOGE("getrandom failed.");
+        exit(-1);
+    }
+    ret = getrandom(&client_id, sizeof(client_id), 0);
+    if (ret != sizeof(client_id)) {
+        LOGE("getrandom failed.");
+        exit(-1);
+    }
+   
+    scramble_data_idx = 0;
+
+    sd_id128_t mid;
+    if (sd_id128_get_machine(&mid)) {
+        LOGE("Unbale to get machine-id");
+        exit(1);
+    }
+    device_id = *(uint64_t*)&mid.bytes[8];
+}
+
+static char *get_prepend_data(int *len)
+{
+    char *data;
+
+    if (scramble_data_idx == -1) {
+        init_scramble_data();
+    }
+
+    data = &scramble_data[scramble_data_idx];
+    scramble_data_idx += shadow_x;
+    if (scramble_data_idx >= sizeof(scramble_data) - shadow_x) {
+        scramble_data_idx = sizeof(scramble_data) - scramble_data_idx + 1;
+    }
+    *len = shadow_x;
+    return data;
+}
+
 int
 create_and_bind(const char *addr, const char *port)
 {
@@ -561,6 +612,7 @@ not_bypass:
     }
 
     if (buf->len > 0) {
+        LOGI("%s memcpy %ld", __FUNCTION__, buf->len);
         memcpy(remote->buf->data, buf->data, buf->len);
         remote->buf->len = buf->len;
     }
@@ -655,6 +707,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (remote == NULL) {
         buf = server->buf;
     } else {
+        LOGI("%s: to remote", __FUNCTION__);
         buf = remote->buf;
     }
 
@@ -927,32 +980,78 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return;
+    }
+
+    // has data to send
+    size_t *len, *idx;
+    char *data;
+    if (remote->head_len) {
+        len = &remote->head_len;
+        idx = &remote->head_idx;
+        data = remote->head;
     } else {
-        // has data to send
-        LOGI("send to remote %ld", remote->buf->len);
-        ssize_t s = send(remote->fd, remote->buf->data + remote->buf->idx,
-                         remote->buf->len, 0);
-        if (s == -1) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                ERROR("remote_send_cb_send");
-                // close and free
-                close_and_free_remote(EV_A_ remote);
-                close_and_free_server(EV_A_ server);
-            }
-            return;
-        } else if (s < (ssize_t)(remote->buf->len)) {
-            // partly sent, move memory, wait for the next time to send
-            remote->buf->len -= s;
-            remote->buf->idx += s;
-            return;
-        } else {
-            // all sent out, wait for reading
-            remote->buf->len = 0;
-            remote->buf->idx = 0;
+        len = &remote->buf->len;
+        idx = &remote->buf->idx;
+        data = remote->buf->data;
+    }
+
+    ssize_t s = send(remote->fd, data + *idx, *len, 0);
+    LOGI("send to remote %ld", s);
+
+    if (s == -1) {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            ERROR("remote_send_cb_send");
+            // close and free
+            close_and_free_remote(EV_A_ remote);
+            close_and_free_server(EV_A_ server);
+        }
+        return;
+    } else if (s < (ssize_t)(*len)) {
+        // partly sent, move memory, wait for the next time to send
+        *len -= s;
+        *idx += s;
+        return;
+    } else {
+        // all sent out, wait for reading
+        *len = 0;
+        *idx = 0;
+        if (!remote->buf->len) {
             ev_io_stop(EV_A_ & remote_send_ctx->io);
             ev_io_start(EV_A_ & server->recv_ctx->io);
         }
     }
+}
+
+static void init_remote_head(remote_t *remote)
+{
+    unsigned char d[4];
+    int ret; 
+    ret = getrandom(d, 4, 0);
+    if (ret != 4) {
+        exit(1);
+    }
+    remote->data_type = d[0];
+    remote->data_len = d[1];
+    remote->pad_type = d[2];
+    remote->pad_len = d[3];
+    remote->pad_type += remote->pad_type == remote->data_type ? 1 : 0;
+    remote->data_len += remote->data_len < 64 ? 64 : 0;
+
+    char *pad;
+    int len;
+    pad = get_prepend_data(&len);
+    memcpy(remote->head, pad, len);
+
+    session_head_t head;
+    head.client_id = htonll(client_id);
+    head.device_id = htonll(device_id);
+    head.epoch = time(NULL);
+    head.epoch = htonl(head.epoch);
+    head.data_type = remote->data_type;
+    head.pad_type = remote->pad_type;
+    memcpy(remote->head + len, &head, sizeof(head));
+    remote->head_len = len + sizeof(head);
+    remote->head_idx = 0;
 }
 
 static remote_t *
@@ -975,6 +1074,7 @@ new_remote(int fd, int timeout)
     remote->recv_ctx->remote    = remote;
     remote->send_ctx->remote    = remote;
 
+    init_remote_head(remote);
     ev_io_init(&remote->recv_ctx->io, remote_recv_cb, fd, EV_READ);
     ev_io_init(&remote->send_ctx->io, remote_send_cb, fd, EV_WRITE);
     ev_timer_init(&remote->send_ctx->watcher, remote_timeout_cb,
@@ -1719,6 +1819,8 @@ main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
     signal(SIGABRT, SIG_IGN);
 #endif
+
+    init_scramble_data();
 
     // Setup keys
     LOGI("initializing ciphers... %s", method);

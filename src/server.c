@@ -150,6 +150,8 @@ static char *ext_validate_rt = NULL;
 uint64_t tx               = 0;
 uint64_t rx               = 0;
 
+static int shadow_x = 146;
+
 #ifndef __MINGW32__
 ev_timer stat_update_watcher;
 #endif
@@ -168,6 +170,10 @@ static struct plugin_watcher_t {
 #endif
 
 static struct cork_dllist connections;
+
+#define MAX_CLIENT_NUM  16
+/* TODO: should use a hash table here */
+static client_info_t clients[MAX_CLIENT_NUM];
 
 #ifndef __MINGW32__
 static void
@@ -951,14 +957,87 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         ev_timer_again(EV_A_ & server->recv_ctx->watcher);
     }
 
-    ssize_t r = recv(server->fd, buf->data, SOCKET_BUF_SIZE, 0);
+    ssize_t r;
+    if (server->client == NULL) {
+        r = recv(server->fd, buf->data + server->recv_len, 
+                 shadow_x + sizeof(session_head_t) - server->recv_len, 0);
+        if (r == 0) {
+            close_and_free_remote(EV_A_ remote);
+            close_and_free_server(EV_A_ server);
+            return;
+        }
+        if (r == -1) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // no data
+                // continue to wait for recv
+                return;
+            } 
+            if (verbose) {
+                char output[64];
+                snprintf(output, sizeof(output)-1, "server(%s) recv", 
+                         server->peer_name);
+                ERROR(output);
+            }
+            close_and_free_remote(EV_A_ remote);
+            close_and_free_server(EV_A_ server);
+            return;
+        }
+
+        if (server->stage == STAGE_STOP) {
+            return;
+        }
+
+
+        server->recv_len += r;
+        if (server->recv_len != shadow_x + sizeof(session_head_t)) {
+            return;
+        }
+
+        session_head_t head;
+        memcpy(&head, buf->data + shadow_x, sizeof(session_head_t));
+        head.client_id = ntohll(head.client_id);
+        head.epoch = ntohl(head.epoch);
+
+        int i, unused = -1;
+        for (i = 0; i < MAX_CLIENT_NUM; i++) {
+            if (!clients[i].client_id) {
+                unused = i;
+            }
+            if (clients[i].client_id == head.client_id) {
+                server->client = &clients[i];
+                break;
+            }
+        }
+        if (i == MAX_CLIENT_NUM) {
+            if (unused == -1) {
+                close_and_free_remote(EV_A_ remote);
+                close_and_free_server(EV_A_ server);
+                return;
+            }
+            clients[unused].client_id = head.client_id;
+            clients[unused].epoch = head.epoch;
+            server->client = &clients[unused];
+        }
+        server->client->data_type = head.data_type;
+        server->client->pad_type = head.pad_type;
+        server->client->pad2_len = head.pad2_len;
+        LOGI("recv client id=%lx:%lx, epoch=%x, %d, %d, %d", 
+              server->client->client_id, 
+              server->client->epoch,
+              server->client->data_type,
+              server->client->pad_type,
+              server->client->pad2_len);
+    }
+
+    r = recv(server->fd, buf->data, SOCKET_BUF_SIZE, 0);
 
     if (r == 0) {
         // connection closed
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return;
-    } else if (r == -1) {
+    } 
+    if (r == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             // no data
             // continue to wait for recv

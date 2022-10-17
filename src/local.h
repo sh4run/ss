@@ -99,6 +99,14 @@ typedef struct remote {
     struct remote_ctx *send_ctx;
     struct server *server;
     struct sockaddr_storage addr;
+
+    unsigned char data_type;
+    unsigned char data_len;
+    unsigned char pad_type;
+    unsigned char pad_len;
+    size_t head_len;
+    size_t head_idx;
+    char head[PAD_MAX_LEN + sizeof(session_head_t)];
 } remote_t;
 
 #endif // _LOCAL_H
