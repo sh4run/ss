@@ -81,6 +81,7 @@ typedef struct client_info {
     uint8_t   pad2_len;
 } client_info_t;
 
+#define SERVER_INPUTBUF_SZ 4096
 typedef struct server {
     int fd;
     int stage;
@@ -104,6 +105,7 @@ typedef struct server {
     char peer_name[32];
     client_info_t *client;
     int  recv_len;
+    uint8_t input_buf[SERVER_INPUTBUF_SZ];
 } server_t;
 
 typedef struct query {

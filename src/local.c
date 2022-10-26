@@ -197,7 +197,7 @@ static void init_scramble_data(void)
     device_id = *(uint64_t*)&mid.bytes[8];
 }
 
-static char *get_prepend_data(int *len)
+static char *get_prepend_data(int len)
 {
     char *data;
 
@@ -205,12 +205,11 @@ static char *get_prepend_data(int *len)
         init_scramble_data();
     }
 
-    data = &scramble_data[scramble_data_idx];
-    scramble_data_idx += shadow_x;
-    if (scramble_data_idx >= sizeof(scramble_data) - shadow_x) {
+    if (scramble_data_idx + len >= sizeof(scramble_data)) {
         scramble_data_idx = sizeof(scramble_data) - scramble_data_idx + 1;
     }
-    *len = shadow_x;
+    data = &scramble_data[scramble_data_idx];
+    scramble_data_idx += len;
     return data;
 }
 
@@ -944,6 +943,76 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     remote->recv_ctx->connected = 1;
 }
 
+static size_t
+init_remote_head(remote_t *remote, char *head_buf)
+{
+    char *pad;
+    int len = shadow_x;
+    pad = get_prepend_data(len);
+    memcpy(head_buf, pad, len);
+
+    session_head_t head;
+    head.client_id = htonll(client_id);
+    head.device_id = htonll(device_id);
+    head.epoch = time(NULL);
+    head.epoch = htonl(head.epoch);
+    head.data_type = remote->rands.data_type;
+    head.pad_type = remote->rands.pad_type;
+    head.pad2_len = remote->rands.pad_len;
+    memcpy(head_buf + len, &head, sizeof(head));
+    LOGI("add head %lx %x", client_id, ntohl(head.epoch));
+    return (size_t)(len + sizeof(head));
+}
+
+static size_t
+remote_generate_output(remote_t *remote)
+{
+    size_t len = 0, cp_len;
+    char *pad;
+    uint64_t bit;
+
+    if (!remote->buf->len) {
+        return 0;
+    }
+    if (!remote->traffic_idx) {
+        len = init_remote_head(remote, remote->output_data);
+    } 
+
+    while (len < REMOTE_OUTPUT_DATA_SZ - 256) {
+        bit = 1 << (remote->traffic_idx++ & 0x3f);
+        if (bit & remote->rands.traffic_pattern) {
+            /* data */
+            cp_len = remote->rands.data_len;
+            cp_len = cp_len > remote->buf->len ? remote->buf->len : cp_len;
+            if (cp_len) {
+                remote->output_data[len++] = remote->rands.data_type;
+                remote->output_data[len++] = cp_len;
+                memcpy(&remote->output_data[len], 
+                       remote->buf->data + remote->buf->idx, cp_len);
+                remote->buf->idx += cp_len;
+                remote->buf->len -= cp_len;
+                len += cp_len;
+                pad = get_prepend_data(1);
+                remote->rands.data_len = pad[0];
+            } else {
+                break;
+            }
+        } else {
+            /* pad */
+            remote->output_data[len++] = remote->rands.pad_type;
+            remote->output_data[len++] = remote->rands.pad_len;
+            pad = get_prepend_data(remote->rands.pad_len+1);
+            memcpy(&remote->output_data[len], pad, remote->rands.pad_len);
+            len += remote->rands.pad_len;
+            remote->rands.pad_len = pad[remote->rands.pad_len];
+            remote->rands.pad_len += remote->rands.pad_len  < 16 ? 16 : 0;
+        }
+    }
+    remote->output_idx = 0;
+    remote->output_len = len;
+    return len;
+}
+
 static void
 remote_send_cb(EV_P_ ev_io *w, int revents)
 {
@@ -975,27 +1044,17 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
         }
     }
 
-    if (remote->buf->len == 0) {
-        // close and free
-        close_and_free_remote(EV_A_ remote);
-        close_and_free_server(EV_A_ server);
-        return;
+    if (!remote->output_len) {
+        if (!remote_generate_output(remote)) {
+            ev_io_stop(EV_A_ & remote_send_ctx->io);
+            ev_io_start(EV_A_ & server->recv_ctx->io);
+            return;
+        }
     }
 
-    // has data to send
-    size_t *len, *idx;
-    char *data;
-    if (remote->head_len) {
-        len = &remote->head_len;
-        idx = &remote->head_idx;
-        data = remote->head;
-    } else {
-        len = &remote->buf->len;
-        idx = &remote->buf->idx;
-        data = remote->buf->data;
-    }
-
-    ssize_t s = send(remote->fd, data + *idx, *len, 0);
+    //dump_buffer((uint8_t*)(remote->output_data + remote->output_idx), remote->output_len);
+    ssize_t s = send(remote->fd, remote->output_data + remote->output_idx, 
+                     remote->output_len, 0);
     LOGI("send to remote %ld", s);
 
     if (s == -1) {
@@ -1006,52 +1065,23 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
             close_and_free_server(EV_A_ server);
         }
         return;
-    } else if (s < (ssize_t)(*len)) {
-        // partly sent, move memory, wait for the next time to send
-        *len -= s;
-        *idx += s;
-        return;
-    } else {
-        // all sent out, wait for reading
-        *len = 0;
-        *idx = 0;
-        if (!remote->buf->len) {
-            ev_io_stop(EV_A_ & remote_send_ctx->io);
-            ev_io_start(EV_A_ & server->recv_ctx->io);
-        }
     }
+
+    remote->output_idx += s;
+    remote->output_len -= s;
 }
 
-static void init_remote_head(remote_t *remote)
+static void
+init_remote_rands(remote_rands_t *rands)
 {
-    unsigned char d[4];
-    int ret; 
-    ret = getrandom(d, 4, 0);
-    if (ret != 4) {
+    int ret = getrandom(rands, sizeof(remote_rands_t), 0);
+    if (ret != sizeof(remote_rands_t)) {
         exit(1);
     }
-    remote->data_type = d[0];
-    remote->data_len = d[1];
-    remote->pad_type = d[2];
-    remote->pad_len = d[3];
-    remote->pad_type += remote->pad_type == remote->data_type ? 1 : 0;
-    remote->data_len += remote->data_len < 64 ? 64 : 0;
 
-    char *pad;
-    int len;
-    pad = get_prepend_data(&len);
-    memcpy(remote->head, pad, len);
-
-    session_head_t head;
-    head.client_id = htonll(client_id);
-    head.device_id = htonll(device_id);
-    head.epoch = time(NULL);
-    head.epoch = htonl(head.epoch);
-    head.data_type = remote->data_type;
-    head.pad_type = remote->pad_type;
-    memcpy(remote->head + len, &head, sizeof(head));
-    remote->head_len = len + sizeof(head);
-    remote->head_idx = 0;
+    rands->pad_type += rands->pad_type == rands->data_type ? 1 : 0;
+    rands->data_len += rands->data_len < 64 ? 64 : 0;
+    rands->pad_len  += rands->pad_len < 16 ? 16 : 0;
 }
 
 static remote_t *
@@ -1074,7 +1104,7 @@ new_remote(int fd, int timeout)
     remote->recv_ctx->remote    = remote;
     remote->send_ctx->remote    = remote;
 
-    init_remote_head(remote);
+    init_remote_rands(&remote->rands);
     ev_io_init(&remote->recv_ctx->io, remote_recv_cb, fd, EV_READ);
     ev_io_init(&remote->send_ctx->io, remote_send_cb, fd, EV_WRITE);
     ev_timer_init(&remote->send_ctx->watcher, remote_timeout_cb,

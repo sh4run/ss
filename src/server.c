@@ -948,6 +948,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     remote_t *remote              = NULL;
 
     buffer_t *buf = server->buf;
+    uint8_t *tlv_head = NULL;
+    size_t next;
 
     if (server->stage == STAGE_STREAM) {
         remote = server->remote;
@@ -958,43 +960,43 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     ssize_t r;
+    r = recv(server->fd, server->input_buf + server->recv_len, 
+             sizeof(server->input_buf) - server->recv_len, 0);
+    LOGI("%s: %ld", __FUNCTION__, r);
+    if (r == 0) {
+        close_and_free_remote(EV_A_ remote);
+        close_and_free_server(EV_A_ server);
+        return;
+    }
+    if (r == -1) {
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            // no data
+            // continue to wait for recv
+            return;
+        } 
+        if (verbose) {
+            char output[64];
+            snprintf(output, sizeof(output)-1, "server(%s) recv", 
+                     server->peer_name);
+            ERROR(output);
+        }
+        close_and_free_remote(EV_A_ remote);
+        close_and_free_server(EV_A_ server);
+        return;
+    }
+
+    if (server->stage == STAGE_STOP) {
+        return;
+    }
+    
+    server->recv_len += r;
     if (server->client == NULL) {
-        r = recv(server->fd, buf->data + server->recv_len, 
-                 shadow_x + sizeof(session_head_t) - server->recv_len, 0);
-        if (r == 0) {
-            close_and_free_remote(EV_A_ remote);
-            close_and_free_server(EV_A_ server);
-            return;
-        }
-        if (r == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // no data
-                // continue to wait for recv
-                return;
-            } 
-            if (verbose) {
-                char output[64];
-                snprintf(output, sizeof(output)-1, "server(%s) recv", 
-                         server->peer_name);
-                ERROR(output);
-            }
-            close_and_free_remote(EV_A_ remote);
-            close_and_free_server(EV_A_ server);
-            return;
-        }
-
-        if (server->stage == STAGE_STOP) {
-            return;
-        }
-
-
-        server->recv_len += r;
-        if (server->recv_len != shadow_x + sizeof(session_head_t)) {
+        if (server->recv_len < shadow_x + sizeof(session_head_t)) {
             return;
         }
 
         session_head_t head;
-        memcpy(&head, buf->data + shadow_x, sizeof(session_head_t));
+        memcpy(&head, server->input_buf + shadow_x, sizeof(session_head_t));
         head.client_id = ntohll(head.client_id);
         head.epoch = ntohl(head.epoch);
 
@@ -1021,48 +1023,49 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         server->client->data_type = head.data_type;
         server->client->pad_type = head.pad_type;
         server->client->pad2_len = head.pad2_len;
-        LOGI("recv client id=%lx:%lx, epoch=%x, %d, %d, %d", 
-              server->client->client_id, 
+        LOGI("recv client id=%lx, epoch=%x, %d, %d, %d", 
+              server->client->client_id,
               server->client->epoch,
               server->client->data_type,
               server->client->pad_type,
               server->client->pad2_len);
+
+        tlv_head = server->input_buf + shadow_x + sizeof(session_head_t);
+    } else {
+        tlv_head = server->input_buf;
     }
 
-    r = recv(server->fd, buf->data, SOCKET_BUF_SIZE, 0);
-
-    if (r == 0) {
-        // connection closed
-        close_and_free_remote(EV_A_ remote);
-        close_and_free_server(EV_A_ server);
+    if (tlv_head > &server->input_buf[server->recv_len - 2]) {
         return;
-    } 
-    if (r == -1) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            // no data
-            // continue to wait for recv
-            return;
-        } else {
-            if (verbose) {
-                char output[64];
-                snprintf(output, sizeof(output)-1, "server(%s) recv", 
-                         server->peer_name);
-                ERROR(output);
-            }
-            close_and_free_remote(EV_A_ remote);
-            close_and_free_server(EV_A_ server);
-            return;
+    }
+
+    next = tlv_head + 2 + tlv_head[1] - server->input_buf;
+    buf->len = buf->idx = 0;
+    while (next <= server->recv_len) {
+        /* This TLV is complete */
+        if (tlv_head[0] == server->client->data_type) {
+            memcpy(buf->data + buf->len, &tlv_head[2], tlv_head[1]);
+            buf->len += tlv_head[1];
         }
+
+        tlv_head = &server->input_buf[next];
+        if (next == server->recv_len) {
+            /* reaching the end of received data */
+            break;
+        }
+        next = tlv_head + 2 + tlv_head[1] - server->input_buf;
     }
 
-    LOGI("%s: %ld", __FUNCTION__, r); 
-    // Ignore any new packet if the server is stopped
-    if (server->stage == STAGE_STOP) {
+    size_t cp_len = server->recv_len - (tlv_head - server->input_buf);
+    if (cp_len) {
+        memcpy(server->input_buf, tlv_head, cp_len);
+    }
+    server->recv_len = cp_len;
+
+    if (!buf->len) {
         return;
     }
-
-    tx      += r;
-    buf->len = r;
+    //dump_buffer((uint8_t*)buf->data, buf->len);
 
     int err = crypto->decrypt(buf, server->d_ctx, SOCKET_BUF_SIZE);
 

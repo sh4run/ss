@@ -83,6 +83,17 @@ typedef struct remote_ctx {
     struct remote *remote;
 } remote_ctx_t;
 
+typedef struct remote_rands {
+    uint64_t traffic_pattern;
+    uint8_t  data_type;
+    uint8_t  data_len;
+    uint8_t  pad_type;
+    uint8_t  pad_len;
+
+    uint8_t  pad2_len;  /* padding from remote to client */
+} remote_rands_t;    
+
+#define REMOTE_OUTPUT_DATA_SZ   4096
 typedef struct remote {
     int fd;
     int direct;
@@ -100,13 +111,11 @@ typedef struct remote {
     struct server *server;
     struct sockaddr_storage addr;
 
-    unsigned char data_type;
-    unsigned char data_len;
-    unsigned char pad_type;
-    unsigned char pad_len;
-    size_t head_len;
-    size_t head_idx;
-    char head[PAD_MAX_LEN + sizeof(session_head_t)];
+    remote_rands_t  rands;
+    uint32_t traffic_idx;
+    char   output_data[REMOTE_OUTPUT_DATA_SZ];
+    size_t output_len;
+    size_t output_idx;
 } remote_t;
 
 #endif // _LOCAL_H
