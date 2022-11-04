@@ -949,7 +949,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
     buffer_t *buf = server->buf;
     uint8_t *tlv_head = NULL;
+#if 0    
     size_t next;
+#endif
 
     if (server->stage == STAGE_STREAM) {
         remote = server->remote;
@@ -962,7 +964,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     ssize_t r;
     r = recv(server->fd, server->input_buf + server->recv_len, 
              sizeof(server->input_buf) - server->recv_len, 0);
-    LOGI("%s: %ld", __FUNCTION__, r);
+    //LOGI("%s: %ld", __FUNCTION__, r);
     if (r == 0) {
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
@@ -1039,10 +1041,16 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    next = tlv_head + 2 + tlv_head[1] - server->input_buf;
     buf->len = buf->idx = 0;
+#if 1
+    memcpy(buf->data + buf->len, &tlv_head[0], server->recv_len - (tlv_head - server->input_buf));
+    buf->len = server->recv_len - (tlv_head - server->input_buf);
+    server->recv_len = 0;
+#else
+    next = tlv_head + 2 + tlv_head[1] - server->input_buf;
     while (next <= server->recv_len) {
         /* This TLV is complete */
+        //LOGI("tlv = %d/%d", tlv_head[0], tlv_head[1]);
         if (tlv_head[0] == server->client->data_type) {
             memcpy(buf->data + buf->len, &tlv_head[2], tlv_head[1]);
             buf->len += tlv_head[1];
@@ -1062,9 +1070,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
     server->recv_len = cp_len;
 
+#endif
+
     if (!buf->len) {
         return;
     }
+    LOGI("%s decrypt: %ld", __FUNCTION__, buf->len);
     //dump_buffer((uint8_t*)buf->data, buf->len);
 
     int err = crypto->decrypt(buf, server->d_ctx, SOCKET_BUF_SIZE);
@@ -1471,6 +1482,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
+    LOGI("%s encrypt %ld", __FUNCTION__, r);
     server->buf->len = r;
     int err = crypto->encrypt(server->buf, server->e_ctx, SOCKET_BUF_SIZE);
 
@@ -1486,6 +1498,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 #endif
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
 
+    //LOGI("%s send %d", __FUNCTION__, s);
     if (s == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             // no data, wait for send

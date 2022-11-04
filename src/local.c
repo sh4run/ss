@@ -485,6 +485,7 @@ server_handshake(EV_P_ ev_io *w, buffer_t *buf)
     if (server_handshake_reply(EV_A_ w, 0, &response) < 0)
         return -1;
     server->stage = STAGE_STREAM;
+    LOGI("server(%ld) stage changed to STAGE_STREAM", (uint64_t)server );
 
     buf->len -= (3 + abuf->len);
     if (buf->len > 0) {
@@ -601,6 +602,7 @@ not_bypass:
     }
 
     if (!remote->direct) {
+        LOGI("%s(%ld) encrypt %ld", __FUNCTION__, (uint64_t)server, abuf->len);
         int err = crypto->encrypt(abuf, server->e_ctx, SOCKET_BUF_SIZE);
         if (err) {
             LOGE("invalid password or cipher");
@@ -611,7 +613,7 @@ not_bypass:
     }
 
     if (buf->len > 0) {
-        LOGI("%s memcpy %ld", __FUNCTION__, buf->len);
+        //LOGI("%s memcpy %ld", __FUNCTION__, buf->len);
         memcpy(remote->buf->data, buf->data, buf->len);
         remote->buf->len = buf->len;
     }
@@ -646,6 +648,7 @@ server_stream(EV_P_ ev_io *w, buffer_t *buf)
 #ifdef __ANDROID__
         tx += remote->buf->len;
 #endif
+        LOGI("%s(%ld) encrypt %ld", __FUNCTION__, (uint64_t)server, remote->buf->len);
         int err = crypto->encrypt(remote->buf, server->e_ctx, SOCKET_BUF_SIZE);
 
         if (err) {
@@ -706,7 +709,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (remote == NULL) {
         buf = server->buf;
     } else {
-        LOGI("%s: to remote", __FUNCTION__);
+        LOGI("%s stage %d: to remote", __FUNCTION__, server->stage);
         buf = remote->buf;
     }
 
@@ -814,6 +817,7 @@ server_send_cb(EV_P_ ev_io *w, int revents)
         // has data to send
         ssize_t s = send(server->fd, server->buf->data + server->buf->idx,
                          server->buf->len, 0);
+        LOGI("%s(%ld) %ld", __FUNCTION__, (uint64_t)server, s);
         if (s == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 ERROR("server_send_cb_send");
@@ -894,7 +898,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         }
     }
 
-    LOGI("%s: %ld", __FUNCTION__, r);
+    //LOGI("%s: %ld", __FUNCTION__, r);
     server->buf->len = r;
 
     if (!remote->direct) {
@@ -902,6 +906,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         rx += server->buf->len;
         stat_update_cb();
 #endif
+        LOGI("%s(%ld) decrypt : %ld", __FUNCTION__, (uint64_t)server, r);
         int err = crypto->decrypt(server->buf, server->d_ctx, SOCKET_BUF_SIZE);
         if (err == CRYPTO_ERROR) {
             LOGE("invalid password or cipher");
@@ -914,6 +919,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
+    LOGI("send to server(%ld) %ld %d", (uint64_t)server, server->buf->len, s);
 
     if (s == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -960,16 +966,19 @@ init_remote_head(remote_t *remote, char *head_buf)
     head.pad_type = remote->rands.pad_type;
     head.pad2_len = remote->rands.pad_len;
     memcpy(head_buf + len, &head, sizeof(head));
-    LOGI("add head %lx %x", client_id, ntohl(head.epoch));
+    //LOGI("add head %lx %x", client_id, ntohl(head.epoch));
     return (size_t)(len + sizeof(head));
 }
 
 static size_t
 remote_generate_output(remote_t *remote)
 {
-    size_t len = 0, cp_len;
+    size_t len = 0;
+#if 0    
+    size_t cp_len;
     char *pad;
     uint64_t bit;
+#endif
 
     if (!remote->buf->len) {
         return 0;
@@ -978,6 +987,14 @@ remote_generate_output(remote_t *remote)
         len = init_remote_head(remote, remote->output_data);
     } 
 
+#if 1
+    remote->traffic_idx++;
+    memcpy(&remote->output_data[len], 
+           remote->buf->data + remote->buf->idx, remote->buf->len);
+    len += remote->buf->len;
+    LOGI("%s copied data %ld head %ld", __FUNCTION__, remote->buf->len, len);
+    remote->buf->len = 0;
+#else
     while (len < REMOTE_OUTPUT_DATA_SZ - 256) {
         bit = 1 << (remote->traffic_idx++ & 0x3f);
         if (bit & remote->rands.traffic_pattern) {
@@ -997,17 +1014,20 @@ remote_generate_output(remote_t *remote)
             } else {
                 break;
             }
+            //LOGI("add data %d %ld %ld", remote->rands.data_type, cp_len, remote->buf->len);
         } else {
             /* pad */
             remote->output_data[len++] = remote->rands.pad_type;
             remote->output_data[len++] = remote->rands.pad_len;
             pad = get_prepend_data(remote->rands.pad_len+1);
             memcpy(&remote->output_data[len], pad, remote->rands.pad_len);
+            //LOGI("add pad %d %d", remote->rands.pad_type, remote->rands.pad_len);
             len += remote->rands.pad_len;
             remote->rands.pad_len = pad[remote->rands.pad_len];
             remote->rands.pad_len += remote->rands.pad_len  < 16 ? 16 : 0;
         }
     }
+#endif    
     remote->output_idx = 0;
     remote->output_len = len;
     return len;
@@ -1046,8 +1066,12 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
 
     if (!remote->output_len) {
         if (!remote_generate_output(remote)) {
+            // close and free
+//            close_and_free_remote(EV_A_ remote);
+//            close_and_free_server(EV_A_ server);
             ev_io_stop(EV_A_ & remote_send_ctx->io);
             ev_io_start(EV_A_ & server->recv_ctx->io);
+            LOGI("%s(%ld) stop", __FUNCTION__, (uint64_t)server);
             return;
         }
     }
@@ -1055,7 +1079,7 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
     //dump_buffer((uint8_t*)(remote->output_data + remote->output_idx), remote->output_len);
     ssize_t s = send(remote->fd, remote->output_data + remote->output_idx, 
                      remote->output_len, 0);
-    LOGI("send to remote %ld", s);
+    LOGI("(%ld)send to remote len=%ld sent=%ld", (uint64_t)server, remote->output_len, s);
 
     if (s == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -1082,6 +1106,8 @@ init_remote_rands(remote_rands_t *rands)
     rands->pad_type += rands->pad_type == rands->data_type ? 1 : 0;
     rands->data_len += rands->data_len < 64 ? 64 : 0;
     rands->pad_len  += rands->pad_len < 16 ? 16 : 0;
+    //rands->traffic_pattern = 0x87d641a5ff981bbc;
+    //printf("\n\n\ntraffic_pattern=%lx\n", rands->traffic_pattern);
 }
 
 static remote_t *
@@ -1211,6 +1237,7 @@ free_server(server_t *server)
 static void
 close_and_free_server(EV_P_ server_t *server)
 {
+    LOGE("%s %ld", __FUNCTION__, (uint64_t)server);
     if (server != NULL) {
         ev_io_stop(EV_A_ & server->send_ctx->io);
         ev_io_stop(EV_A_ & server->recv_ctx->io);
