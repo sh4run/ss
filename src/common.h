@@ -96,7 +96,7 @@ typedef struct session_head {
 static inline void dump_buffer(uint8_t *data, int len)
 {
     int i, j;
-    printf("\n");
+    printf("\nlen = %d\n", len);
     for (i = 0, j = 0; i < len; i++, j++) {
         printf("%x ", data[i]);
         if (j == 16) {

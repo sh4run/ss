@@ -949,9 +949,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
     buffer_t *buf = server->buf;
     uint8_t *tlv_head = NULL;
-#if 0    
     size_t next;
-#endif
 
     if (server->stage == STAGE_STREAM) {
         remote = server->remote;
@@ -964,7 +962,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     ssize_t r;
     r = recv(server->fd, server->input_buf + server->recv_len, 
              sizeof(server->input_buf) - server->recv_len, 0);
-    //LOGI("%s: %ld", __FUNCTION__, r);
+    //LOGI("%s(server=%lx): %ld leftover=%d", __FUNCTION__, (uint64_t)server, r, server->recv_len);
     if (r == 0) {
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
@@ -1022,15 +1020,15 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             clients[unused].epoch = head.epoch;
             server->client = &clients[unused];
         }
-        server->client->data_type = head.data_type;
-        server->client->pad_type = head.pad_type;
-        server->client->pad2_len = head.pad2_len;
+        server->data_type = head.data_type;
+        server->pad_type = head.pad_type;
+        server->pad2_len = head.pad2_len;
         LOGI("recv client id=%lx, epoch=%x, %d, %d, %d", 
               server->client->client_id,
               server->client->epoch,
-              server->client->data_type,
-              server->client->pad_type,
-              server->client->pad2_len);
+              server->data_type,
+              server->pad_type,
+              server->pad2_len);
 
         tlv_head = server->input_buf + shadow_x + sizeof(session_head_t);
     } else {
@@ -1042,18 +1040,14 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     buf->len = buf->idx = 0;
-#if 1
-    memcpy(buf->data + buf->len, &tlv_head[0], server->recv_len - (tlv_head - server->input_buf));
-    buf->len = server->recv_len - (tlv_head - server->input_buf);
-    server->recv_len = 0;
-#else
     next = tlv_head + 2 + tlv_head[1] - server->input_buf;
     while (next <= server->recv_len) {
         /* This TLV is complete */
-        //LOGI("tlv = %d/%d", tlv_head[0], tlv_head[1]);
-        if (tlv_head[0] == server->client->data_type) {
+        if (tlv_head[0] == server->data_type) {
             memcpy(buf->data + buf->len, &tlv_head[2], tlv_head[1]);
             buf->len += tlv_head[1];
+        } else if (tlv_head[0] != server->pad_type) {
+            LOGE("%s wrong tlv type=%d", __FUNCTION__, tlv_head[0]);
         }
 
         tlv_head = &server->input_buf[next];
@@ -1070,12 +1064,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
     server->recv_len = cp_len;
 
-#endif
-
     if (!buf->len) {
         return;
     }
-    LOGI("%s decrypt: %ld", __FUNCTION__, buf->len);
+    //LOGI("%s decrypt: %ld", __FUNCTION__, buf->len);
     //dump_buffer((uint8_t*)buf->data, buf->len);
 
     int err = crypto->decrypt(buf, server->d_ctx, SOCKET_BUF_SIZE);
@@ -1482,7 +1474,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    LOGI("%s encrypt %ld", __FUNCTION__, r);
+    //LOGI("%s encrypt %ld", __FUNCTION__, r);
     server->buf->len = r;
     int err = crypto->encrypt(server->buf, server->e_ctx, SOCKET_BUF_SIZE);
 

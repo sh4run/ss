@@ -76,12 +76,10 @@ struct query;
 typedef struct client_info {
     uint64_t  client_id;
     uint32_t  epoch;
-    uint8_t   data_type;
-    uint8_t   pad_type;
-    uint8_t   pad2_len;
+    uint32_t  pad;
 } client_info_t;
 
-#define SERVER_INPUTBUF_SZ 4096
+#define SERVER_INPUTBUF_SZ   8192
 typedef struct server {
     int fd;
     int stage;
@@ -105,6 +103,12 @@ typedef struct server {
     char peer_name[32];
     client_info_t *client;
     int  recv_len;
+
+    uint8_t   data_type;                                                                              
+    uint8_t   pad_type;
+    uint8_t   pad2_len;
+    uint8_t   pad;
+
     uint8_t input_buf[SERVER_INPUTBUF_SZ];
 } server_t;
 

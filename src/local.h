@@ -93,7 +93,7 @@ typedef struct remote_rands {
     uint8_t  pad2_len;  /* padding from remote to client */
 } remote_rands_t;    
 
-#define REMOTE_OUTPUT_DATA_SZ   4096
+#define REMOTE_OUTPUT_DATA_SZ   8192
 typedef struct remote {
     int fd;
     int direct;
