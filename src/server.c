@@ -66,6 +66,8 @@ enum datatypes {
 #endif
 
 #include "netutils.h"
+
+#define RANDOM_DATA_SIZE  40040
 #include "utils.h"
 #include "acl.h"
 #include "plugin.h"
@@ -150,7 +152,9 @@ static char *ext_validate_rt = NULL;
 uint64_t tx               = 0;
 uint64_t rx               = 0;
 
-static int shadow_x = 146;
+static int scramble_x = SCRAMBLE_X;
+
+#define  EPOCH_MARGIN   50000
 
 #ifndef __MINGW32__
 ev_timer stat_update_watcher;
@@ -171,7 +175,7 @@ static struct plugin_watcher_t {
 
 static struct cork_dllist connections;
 
-#define MAX_CLIENT_NUM  16
+#define MAX_CLIENT_NUM  32
 /* TODO: should use a hash table here */
 static client_info_t clients[MAX_CLIENT_NUM];
 
@@ -840,7 +844,9 @@ connect_to_remote(EV_P_ struct addrinfo *res,
         int r = connect(sockfd, res->ai_addr, res->ai_addrlen);
 
         if (r == -1 && errno != CONNECT_IN_PROGRESS) {
-            ERROR("connect");
+            if (verbose) {
+                ERROR("connect");
+            }
             close_and_free_remote(EV_A_ remote);
             return NULL;
         }
@@ -986,30 +992,42 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     if (server->stage == STAGE_STOP) {
+        if (!server->pad)
+        dump_buffer(server->input_buf + server->recv_len, r);
         return;
     }
     
     server->recv_len += r;
     if (server->client == NULL) {
-        if (server->recv_len < shadow_x + sizeof(session_head_t)) {
+        if (server->recv_len < scramble_x + sizeof(session_head_t)) {
             return;
         }
 
         session_head_t head;
-        memcpy(&head, server->input_buf + shadow_x, sizeof(session_head_t));
+        memcpy(&head, server->input_buf + scramble_x, sizeof(session_head_t));
         head.client_id = ntohll(head.client_id);
-        head.epoch = ntohl(head.epoch);
+        head.device_id = ntohll(head.device_id);
+        head.epoch     = ntohll(head.epoch);
+
+#if 0
+        LOGI("recv client id=%lx:%lx, epoch=%lx",
+              head.client_id,
+              head.device_id,
+              head.epoch);
+#endif
 
         int i, unused = -1;
         for (i = 0; i < MAX_CLIENT_NUM; i++) {
             if (!clients[i].client_id) {
                 unused = i;
             }
-            if (clients[i].client_id == head.client_id) {
+            if (clients[i].client_id == head.client_id && 
+                clients[i].device_id == head.device_id) {
                 server->client = &clients[i];
                 break;
             }
         }
+
         if (i == MAX_CLIENT_NUM) {
             if (unused == -1) {
                 close_and_free_remote(EV_A_ remote);
@@ -1017,20 +1035,33 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 return;
             }
             clients[unused].client_id = head.client_id;
-            clients[unused].epoch = head.epoch;
+            clients[unused].device_id = head.device_id;
+            clients[unused].last_epoch = EPOCH_MARGIN;
             server->client = &clients[unused];
         }
+
+        /*
+         * It has been observed that a slightly later connection 
+         * may arrive earlier. Leave a EPOCH_MARGIN us margin here. 
+         * TODO: make this margin a configurable parameter.
+         */
+        if ((server->client->last_epoch - EPOCH_MARGIN) >= head.epoch) {
+            /* anti replay */
+            LOGE("Obsolete Epoch from %s: last=%lx curr=%lx diff=%ld",
+                 server->peer_name,
+                 server->client->last_epoch, head.epoch, 
+                 server->client->last_epoch - head.epoch);
+            server->pad = 1;
+            stop_server(EV_A_ server);
+            return;
+        }
+
+        server->client->last_epoch = head.epoch;
         server->data_type = head.data_type;
         server->pad_type = head.pad_type;
         server->pad2_len = head.pad2_len;
-        LOGI("recv client id=%lx, epoch=%x, %d, %d, %d", 
-              server->client->client_id,
-              server->client->epoch,
-              server->data_type,
-              server->pad_type,
-              server->pad2_len);
 
-        tlv_head = server->input_buf + shadow_x + sizeof(session_head_t);
+        tlv_head = server->input_buf + scramble_x + sizeof(session_head_t);
     } else {
         tlv_head = server->input_buf;
     }
@@ -1248,7 +1279,9 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             remote_t *remote = connect_to_remote(EV_A_ & info, server);
 
             if (remote == NULL) {
-                LOGE("connect error");
+                if (verbose) {
+                    LOGE("connect error %s %d", host, atyp);
+                }
                 close_and_free_server(EV_A_ server);
                 return;
             } else {
@@ -1488,6 +1521,17 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 #ifdef USE_NFCONNTRACK_TOS
     setTosFromConnmark(remote, server);
 #endif
+
+    if (server->pad2_len) {
+        /*
+         * this is the first packet. Should have no problem
+         * sending those padding.
+         */
+        send(server->fd, get_random_data(server->pad2_len),
+             server->pad2_len, 0);
+        server->pad2_len = 0;
+    }
+
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
 
     //LOGI("%s send %d", __FUNCTION__, s);
@@ -1966,6 +2010,8 @@ main(int argc, char **argv)
     memset(server_addr, 0, sizeof(ss_addr_t) * MAX_REMOTE_NUM);
     memset(&local_addr_v4, 0, sizeof(struct sockaddr_storage));
     memset(&local_addr_v6, 0, sizeof(struct sockaddr_storage));
+
+    init_random_data();
 
     static struct option long_options[] = {
         { "fast-open",       no_argument,       NULL, GETOPT_VAL_FAST_OPEN   },

@@ -75,8 +75,8 @@ struct query;
 
 typedef struct client_info {
     uint64_t  client_id;
-    uint32_t  epoch;
-    uint32_t  pad;
+    uint64_t  device_id;
+    uint64_t  last_epoch;
 } client_info_t;
 
 #define SERVER_INPUTBUF_SZ   8192

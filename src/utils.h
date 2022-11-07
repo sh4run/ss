@@ -252,4 +252,55 @@ char *get_default_conf(void);
 uint16_t load16_be(const void *s);
 int get_mptcp(int enable);
 
+#define htonll(x) ((1==htonl(1)) ? (x) : ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32))
+#define ntohll(x) ((1==ntohl(1)) ? (x) : ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32))
+
+static inline void dump_buffer(uint8_t *data, int len)
+{
+    int i, j;
+    printf("\nlen = %d\n", len);
+    for (i = 0, j = 0; i < len; i++, j++) {
+        printf("%x ", data[i]);
+        if (j == 32) {
+            printf("\n");
+            j = 0;
+        }
+    }
+    printf("\n");
+}
+
+#ifdef RANDOM_DATA_SIZE
+
+#include <sys/random.h>
+
+static char scramble_data[RANDOM_DATA_SIZE];
+static int scramble_data_idx = -1;
+
+static void init_random_data(void)
+{
+    int ret;
+    ret = getrandom(scramble_data, sizeof(scramble_data), 0);
+    if (ret != sizeof(scramble_data)) {
+        LOGE("getrandom failed.");
+        exit(-1);
+    }
+
+    scramble_data_idx = 0;
+}
+
+static char *get_random_data(int len)
+{
+    char *data;
+
+    if (scramble_data_idx + len >= sizeof(scramble_data)) {
+        scramble_data_idx = sizeof(scramble_data) - scramble_data_idx + 1;
+    }
+    data = &scramble_data[scramble_data_idx];
+    scramble_data_idx += len;
+    return data;
+}
+
+
+#endif
+
 #endif // _UTILS_H

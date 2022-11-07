@@ -26,6 +26,7 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <locale.h>
 #include <signal.h>
@@ -52,7 +53,10 @@
 #include <libcork/core.h>
 
 #include "netutils.h"
+
+#define RANDOM_DATA_SIZE  80040
 #include "utils.h"
+
 #include "socks5.h"
 #include "acl.h"
 #include "plugin.h"
@@ -166,51 +170,28 @@ setnonblocking(int fd)
 #include <sys/random.h>
 #include <systemd/sd-id128.h>
 
-static int shadow_x = 146;
+static int scramble_x = SCRAMBLE_X;
 static uint64_t client_id;  // should go to remote_t
 static uint64_t device_id;
 
-static char scramble_data[40000];
-static int scramble_data_idx = -1;
 
 static void init_scramble_data(void)
 {
     int ret;
-    ret = getrandom(scramble_data, sizeof(scramble_data), 0);
-    if (ret != sizeof(scramble_data)) {
-        LOGE("getrandom failed.");
-        exit(-1);
-    }
+
+    init_random_data();
     ret = getrandom(&client_id, sizeof(client_id), 0);
     if (ret != sizeof(client_id)) {
         LOGE("getrandom failed.");
         exit(-1);
     }
    
-    scramble_data_idx = 0;
-
     sd_id128_t mid;
     if (sd_id128_get_machine(&mid)) {
         LOGE("Unbale to get machine-id");
         exit(1);
     }
     device_id = *(uint64_t*)&mid.bytes[8];
-}
-
-static char *get_prepend_data(int len)
-{
-    char *data;
-
-    if (scramble_data_idx == -1) {
-        init_scramble_data();
-    }
-
-    if (scramble_data_idx + len >= sizeof(scramble_data)) {
-        scramble_data_idx = sizeof(scramble_data) - scramble_data_idx + 1;
-    }
-    data = &scramble_data[scramble_data_idx];
-    scramble_data_idx += len;
-    return data;
 }
 
 int
@@ -712,10 +693,6 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     if (revents != EV_TIMER) {
-        if (buf->len) {
-            LOGE("non-zero len %ld %ld", buf->len, buf->idx);
-        }
-
         r = recv(server->fd, buf->data + buf->len, SOCKET_BUF_SIZE - buf->len, 0);
 
         if (r == 0) {
@@ -900,6 +877,14 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         }
     }
 
+    if (remote->rands.pad2_len) {
+        r -= remote->rands.pad2_len;
+        memcpy(server->buf->data,
+               server->buf->data + remote->rands.pad2_len,
+               r);
+        remote->rands.pad2_len = 0;
+    }
+
     server->buf->len = r;
 
     if (!remote->direct) {
@@ -954,20 +939,27 @@ static size_t
 init_remote_head(remote_t *remote, char *head_buf)
 {
     char *pad;
-    int len = shadow_x;
-    pad = get_prepend_data(len);
+    int len = scramble_x;
+    pad = get_random_data(len);
     memcpy(head_buf, pad, len);
 
     session_head_t head;
     head.client_id = htonll(client_id);
     head.device_id = htonll(device_id);
-    head.epoch = time(NULL);
-    head.epoch = htonl(head.epoch);
+    
+    struct timeval secs;
+    gettimeofday(&secs, NULL);
+    head.epoch = secs.tv_sec;
+    head.epoch <<= 20;
+    head.epoch += secs.tv_usec;
+    head.epoch = htonll(head.epoch);
+
     head.data_type = remote->rands.data_type;
     head.pad_type = remote->rands.pad_type;
-    head.pad2_len = remote->rands.pad_len;
+    head.pad2_len = remote->rands.pad2_len;
+
     memcpy(head_buf + len, &head, sizeof(head));
-    //LOGI("add head %lx %x", client_id, ntohl(head.epoch));
+    //LOGI("add head %lx %lx", client_id, ntohll(head.epoch));
     return (size_t)(len + sizeof(head));
 }
 
@@ -1002,7 +994,7 @@ remote_generate_output(remote_t *remote)
                 remote->buf->idx += cp_len;
                 remote->buf->len -= cp_len;
                 len += cp_len;
-                pad = get_prepend_data(1);
+                pad = get_random_data(1);
                 remote->rands.data_len = pad[0];
                 remote->rands.data_len += remote->rands.data_len < 64 ? 64 : 0;
             } else {
@@ -1013,7 +1005,7 @@ remote_generate_output(remote_t *remote)
             /* pad */
             remote->output_data[len++] = remote->rands.pad_type;
             remote->output_data[len++] = remote->rands.pad_len;
-            pad = get_prepend_data(remote->rands.pad_len+1);
+            pad = get_random_data(remote->rands.pad_len+1);
             memcpy(&remote->output_data[len], pad, remote->rands.pad_len);
             //LOGI("add pad %d %d", remote->rands.pad_type, remote->rands.pad_len);
             len += remote->rands.pad_len;
@@ -1102,8 +1094,7 @@ init_remote_rands(remote_rands_t *rands)
     rands->pad_type += rands->pad_type == rands->data_type ? 1 : 0;
     rands->data_len += rands->data_len < 64 ? 64 : 0;
     rands->pad_len  += rands->pad_len < 16 ? 16 : 0;
-    //rands->traffic_pattern = 0x87d641a5ff981bbc;
-    //printf("\n\n\ntraffic_pattern=%lx\n", rands->traffic_pattern);
+    rands->pad2_len += rands->pad2_len < 32 ? 32 : 0;
 }
 
 static remote_t *
@@ -2046,6 +2037,8 @@ _start_ss_local_server(profile_t profile, ss_local_callback callback, void *udat
     char remote_port_str[16];
     sprintf(local_port_str, "%d", local_port);
     sprintf(remote_port_str, "%d", remote_port);
+
+    init_scramble_data();
 
 #ifdef __MINGW32__
     winsock_init();
