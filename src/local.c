@@ -102,7 +102,6 @@ ev_tstamp last = 0;
 char *stat_path   = NULL;
 #endif
 
-//static RSA *public_key = NULL;
 static EVP_PKEY *public_key = NULL;
 
 static crypto_t *crypto;
@@ -583,7 +582,6 @@ not_bypass:
     }
 
     if (!remote->direct) {
-        //LOGI("%s(%ld) encrypt %ld", __FUNCTION__, (uint64_t)server, abuf->len);
         int err = crypto->encrypt(abuf, server->e_ctx, SOCKET_BUF_SIZE);
         if (err) {
             LOGE("invalid password or cipher");
@@ -628,7 +626,6 @@ server_stream(EV_P_ ev_io *w, buffer_t *buf)
 #ifdef __ANDROID__
         tx += remote->buf->len;
 #endif
-        //LOGI("%s(%ld) encrypt %ld", __FUNCTION__, (uint64_t)server, remote->buf->len);
         int err = crypto->encrypt(remote->buf, server->e_ctx, SOCKET_BUF_SIZE);
 
         if (err) {
