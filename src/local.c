@@ -186,7 +186,7 @@ static uint64_t device_id;
 static void init_scramble_data(void)
 {
     init_random_data();
-   
+
     sd_id128_t mid;
     if (sd_id128_get_machine(&mid)) {
         LOGE("Unbale to get machine-id");
@@ -689,7 +689,6 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (remote == NULL) {
         buf = server->buf;
     } else {
-        //LOGI("%s stage %d: to remote", __FUNCTION__, server->stage);
         buf = remote->buf;
     }
 
@@ -797,7 +796,6 @@ server_send_cb(EV_P_ ev_io *w, int revents)
         // has data to send
         ssize_t s = send(server->fd, server->buf->data + server->buf->idx,
                          server->buf->len, 0);
-        //LOGI("%s(%ld) %ld", __FUNCTION__, (uint64_t)server, s);
         if (s == -1) {
             if (errno != EAGAIN && errno != EWOULDBLOCK) {
                 ERROR("server_send_cb_send");
@@ -893,7 +891,6 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         rx += server->buf->len;
         stat_update_cb();
 #endif
-        //LOGI("%s(%ld) decrypt : %ld", __FUNCTION__, (uint64_t)server, r);
         int err = crypto->decrypt(server->buf, server->d_ctx, SOCKET_BUF_SIZE);
         if (err == CRYPTO_ERROR) {
             LOGE("invalid password or cipher");
@@ -906,7 +903,6 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
-    //LOGI("send to server(%ld) %ld %d", (uint64_t)server, server->buf->len, s);
 
     if (s == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -951,7 +947,7 @@ init_remote_head(remote_t *remote, char *head_buf)
     } else {
         head.client_id = head.device_id;
     }
-    
+
     struct timeval secs;
     gettimeofday(&secs, NULL);
     head.epoch = secs.tv_sec;
@@ -994,9 +990,8 @@ remote_generate_output(remote_t *remote)
     }
     if (!remote->traffic_idx) {
         len = init_remote_head(remote, remote->output_data);
-    } 
+    }
 
-    //dump_buffer((uint8_t*)remote->buf->data, remote->buf->len);
     while (len < REMOTE_OUTPUT_DATA_SZ - 256) {
         bit = 1;
         bit <<= (remote->traffic_idx++ & 0x3f);
@@ -1007,7 +1002,7 @@ remote_generate_output(remote_t *remote)
             if (cp_len) {
                 remote->output_data[len++] = remote->rands.data_type;
                 remote->output_data[len++] = cp_len;
-                memcpy(&remote->output_data[len], 
+                memcpy(&remote->output_data[len],
                        remote->buf->data + remote->buf->idx, cp_len);
                 remote->buf->idx += cp_len;
                 remote->buf->len -= cp_len;
@@ -1018,14 +1013,12 @@ remote_generate_output(remote_t *remote)
             } else {
                 break;
             }
-            //LOGI("add data %d %ld %ld", remote->rands.data_type, cp_len, remote->buf->len);
         } else {
             /* pad */
             remote->output_data[len++] = remote->rands.pad_type;
             remote->output_data[len++] = remote->rands.pad_len;
             pad = get_random_data(remote->rands.pad_len+1);
             memcpy(&remote->output_data[len], pad, remote->rands.pad_len);
-            //LOGI("add pad %d %d", remote->rands.pad_type, remote->rands.pad_len);
             len += remote->rands.pad_len;
             remote->rands.pad_len = pad[remote->rands.pad_len];
             remote->rands.pad_len += remote->rands.pad_len  < 16 ? 16 : 0;
@@ -1034,7 +1027,6 @@ remote_generate_output(remote_t *remote)
 
     remote->output_idx = 0;
     remote->output_len = len;
-    //LOGI("%s return %ld", __FUNCTION__, len);
     return len;
 }
 
@@ -1072,20 +1064,14 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
     if (!remote->output_len) {
         if (!remote_generate_output(remote)) {
             // close and free
-//            close_and_free_remote(EV_A_ remote);
-//            close_and_free_server(EV_A_ server);
             ev_io_stop(EV_A_ & remote_send_ctx->io);
             ev_io_start(EV_A_ & server->recv_ctx->io);
-            //LOGI("%s(%ld) stop %ld %ld", __FUNCTION__, (uint64_t)server, 
-            //     remote->buf->len, remote->buf->idx);
             return;
         }
     }
 
-    //dump_buffer((uint8_t*)(remote->output_data + remote->output_idx), remote->output_len);
     ssize_t s = send(remote->fd, remote->output_data + remote->output_idx, 
                      remote->output_len, 0);
-    //LOGI("(%ld)send to remote len=%ld sent=%ld", (uint64_t)server, remote->output_len, s);
 
     if (s == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {

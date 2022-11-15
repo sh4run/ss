@@ -973,7 +973,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     ssize_t r;
-    r = recv(server->fd, server->input_buf + server->recv_len, 
+    r = recv(server->fd, server->input_buf + server->recv_len,
              sizeof(server->input_buf) - server->recv_len, 0);
     //LOGI("%s(server=%lx): %ld leftover=%d", __FUNCTION__, (uint64_t)server, r, server->recv_len);
     if (r == 0) {
@@ -986,10 +986,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             // no data
             // continue to wait for recv
             return;
-        } 
+        }
         if (verbose) {
             char output[64];
-            snprintf(output, sizeof(output)-1, "server(%s) recv", 
+            snprintf(output, sizeof(output)-1, "server(%s) recv",
                      server->peer_name);
             ERROR(output);
         }
@@ -1003,12 +1003,12 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         dump_buffer(server->input_buf + server->recv_len, r);
         return;
     }
-    
+
     server->recv_len += r;
     if (server->client == NULL) {
         size_t outl = EVP_PKEY_get_size(private_key);
         size_t inl = EVP_PKEY_get_size(private_key);
-    
+
         if (server->recv_len < scramble_len + inl) {
             return;
         }
@@ -1021,14 +1021,14 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         uint8_t *out = (uint8_t *)malloc(outl);
         int error = 1;
         if (out) {
-            if (EVP_PKEY_decrypt(ctx, out, &outl, 
-                                 (uint8_t*)(server->input_buf + scramble_len), 
+            if (EVP_PKEY_decrypt(ctx, out, &outl,
+                                 (uint8_t*)(server->input_buf + scramble_len),
                                  inl) == 1) {
                 memcpy(&head, out, sizeof(session_head_t));
                 error = 0;
             }
             free(out);
-        } 
+        }
         EVP_PKEY_CTX_free(ctx);
 
         if (error) {
@@ -1053,7 +1053,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             if (!clients[i].client_id) {
                 unused = i;
             }
-            if (clients[i].client_id == head.client_id && 
+            if (clients[i].client_id == head.client_id &&
                 clients[i].device_id == head.device_id) {
                 server->client = &clients[i];
                 break;
@@ -1073,8 +1073,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         }
 
         /*
-         * It has been observed that a slightly later connection 
-         * may arrive earlier. Leave a EPOCH_MARGIN us margin here. 
+         * It has been observed that a slightly later connection
+         * may arrive earlier. Leave a EPOCH_MARGIN us margin here.
          * TODO: make this margin a configurable parameter.
          */
         if ((server->client->last_epoch - EPOCH_MARGIN) >= head.epoch) {
@@ -1130,8 +1130,6 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     if (!buf->len) {
         return;
     }
-    //LOGI("%s decrypt: %ld", __FUNCTION__, buf->len);
-    //dump_buffer((uint8_t*)buf->data, buf->len);
 
     int err = crypto->decrypt(buf, server->d_ctx, SOCKET_BUF_SIZE);
 
@@ -1539,7 +1537,6 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    //LOGI("%s encrypt %ld", __FUNCTION__, r);
     server->buf->len = r;
     int err = crypto->encrypt(server->buf, server->e_ctx, SOCKET_BUF_SIZE);
 
@@ -1566,7 +1563,6 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
 
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
 
-    //LOGI("%s send %d", __FUNCTION__, s);
     if (s == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             // no data, wait for send

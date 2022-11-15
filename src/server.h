@@ -104,7 +104,7 @@ typedef struct server {
     client_info_t *client;
     int  recv_len;
 
-    uint8_t   data_type;                                                                              
+    uint8_t   data_type;
     uint8_t   pad_type;
     uint8_t   pad2_len;
     uint8_t   pad;
