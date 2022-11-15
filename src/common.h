@@ -88,6 +88,7 @@ typedef struct __attribute__((__packed__)) session_head {
     uint8_t   pad_type;
     uint8_t   pad2_len;
     uint8_t   reserve;
+    uint32_t  rand;
 } session_head_t;
 
 #define SCRAMBLE_X    167

@@ -369,6 +369,15 @@ read_jconf(const char *file)
                 conf.manager_address = to_string(value);
             } else if (strcmp(name, "external_validation") == 0) {
                 conf.ext_validate_rt = to_string(value);
+            } else if (!strcmp(name, "scramble_length")) {
+                check_json_value_type(value, json_integer,
+                                      "invalid config file: option \
+                                      'scramble_length' must be an integer");
+                conf.scramble_len = value->u.integer;
+            } else if (!strcmp(name, "public_key")) {
+                conf.public_key_file = to_string(value);
+            } else if (!strcmp(name, "private_key")) {
+                conf.private_key_file = to_string(value);
             }
         }
     } else {

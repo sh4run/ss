@@ -75,6 +75,11 @@ enum datatypes {
 #include "winsock.h"
 #include "resolv.h"
 
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <openssl/err.h>
+
 #ifndef EAGAIN
 #define EAGAIN EWOULDBLOCK
 #endif
@@ -152,7 +157,9 @@ static char *ext_validate_rt = NULL;
 uint64_t tx               = 0;
 uint64_t rx               = 0;
 
-static int scramble_x = SCRAMBLE_X;
+static int scramble_len = SCRAMBLE_X;
+
+static EVP_PKEY *private_key = NULL;
 
 #define  EPOCH_MARGIN   50000
 
@@ -999,22 +1006,47 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     
     server->recv_len += r;
     if (server->client == NULL) {
-        if (server->recv_len < scramble_x + sizeof(session_head_t)) {
+        size_t outl = EVP_PKEY_get_size(private_key);
+        size_t inl = EVP_PKEY_get_size(private_key);
+    
+        if (server->recv_len < scramble_len + inl) {
             return;
         }
 
         session_head_t head;
-        memcpy(&head, server->input_buf + scramble_x, sizeof(session_head_t));
+
+        EVP_PKEY_CTX*ctx = EVP_PKEY_CTX_new(private_key, NULL);
+        EVP_PKEY_decrypt_init(ctx);
+
+        uint8_t *out = (uint8_t *)malloc(outl);
+        int error = 1;
+        if (out) {
+            if (EVP_PKEY_decrypt(ctx, out, &outl, 
+                                 (uint8_t*)(server->input_buf + scramble_len), 
+                                 inl) == 1) {
+                memcpy(&head, out, sizeof(session_head_t));
+                error = 0;
+            }
+            free(out);
+        } 
+        EVP_PKEY_CTX_free(ctx);
+
+        if (error) {
+            report_addr(server->fd, "head decryption error");
+            stop_server(EV_A_ server);
+            return;
+        }
+
         head.client_id = ntohll(head.client_id);
         head.device_id = ntohll(head.device_id);
         head.epoch     = ntohll(head.epoch);
 
-#if 0
-        LOGI("recv client id=%lx:%lx, epoch=%lx",
-              head.client_id,
-              head.device_id,
-              head.epoch);
-#endif
+        if (verbose) {
+            LOGI("recv client id=%lx:%lx, epoch=%lx",
+                head.client_id,
+                head.device_id,
+                head.epoch);
+        }
 
         int i, unused = -1;
         for (i = 0; i < MAX_CLIENT_NUM; i++) {
@@ -1030,8 +1062,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
         if (i == MAX_CLIENT_NUM) {
             if (unused == -1) {
-                close_and_free_remote(EV_A_ remote);
-                close_and_free_server(EV_A_ server);
+                LOGE("max client number reached.");
+                stop_server(EV_A_ server);
                 return;
             }
             clients[unused].client_id = head.client_id;
@@ -1061,7 +1093,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         server->pad_type = head.pad_type;
         server->pad2_len = head.pad2_len;
 
-        tlv_head = server->input_buf + scramble_x + sizeof(session_head_t);
+        tlv_head = server->input_buf + scramble_len + inl;
     } else {
         tlv_head = server->input_buf;
     }
@@ -2280,6 +2312,23 @@ main(int argc, char **argv)
                 LOGE("Unable to install %s(%x).", ext_validate_rt, sb.st_mode);
                 ext_validate_rt[0] = 0;
             }
+        }
+        if (conf->scramble_len) {
+            LOGI("prepend scramble length is set to %d", conf->scramble_len);
+            scramble_len = conf->scramble_len;
+        }
+        if (conf->private_key_file) {
+            FILE * fp = fopen(conf->private_key_file, "rb");
+            if (fp) {
+                private_key = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
+                fclose(fp);
+            } else {
+                LOGE("file %s not found.", conf->private_key_file);
+            }
+        }
+        if (!private_key) {
+            LOGE("unable to read private key.");
+            exit(1);
         }
     }
 

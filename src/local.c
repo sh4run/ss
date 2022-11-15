@@ -63,6 +63,11 @@
 #include "local.h"
 #include "winsock.h"
 
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <openssl/err.h>
+
 #ifndef LIB_ONLY
 #ifdef __APPLE__
 #include <AvailabilityMacros.h>
@@ -96,6 +101,9 @@ ev_tstamp last = 0;
 
 char *stat_path   = NULL;
 #endif
+
+//static RSA *public_key = NULL;
+static EVP_PKEY *public_key = NULL;
 
 static crypto_t *crypto;
 
@@ -170,21 +178,14 @@ setnonblocking(int fd)
 #include <sys/random.h>
 #include <systemd/sd-id128.h>
 
-static int scramble_x = SCRAMBLE_X;
+static int scramble_len = SCRAMBLE_X;
 static uint64_t client_id;  // should go to remote_t
 static uint64_t device_id;
 
 
 static void init_scramble_data(void)
 {
-    int ret;
-
     init_random_data();
-    ret = getrandom(&client_id, sizeof(client_id), 0);
-    if (ret != sizeof(client_id)) {
-        LOGE("getrandom failed.");
-        exit(-1);
-    }
    
     sd_id128_t mid;
     if (sd_id128_get_machine(&mid)) {
@@ -939,13 +940,17 @@ static size_t
 init_remote_head(remote_t *remote, char *head_buf)
 {
     char *pad;
-    int len = scramble_x;
+    int len = scramble_len;
     pad = get_random_data(len);
     memcpy(head_buf, pad, len);
 
     session_head_t head;
-    head.client_id = htonll(client_id);
     head.device_id = htonll(device_id);
+    if (client_id) {
+        head.client_id = htonll(client_id);
+    } else {
+        head.client_id = head.device_id;
+    }
     
     struct timeval secs;
     gettimeofday(&secs, NULL);
@@ -958,9 +963,22 @@ init_remote_head(remote_t *remote, char *head_buf)
     head.pad_type = remote->rands.pad_type;
     head.pad2_len = remote->rands.pad2_len;
 
-    memcpy(head_buf + len, &head, sizeof(head));
-    //LOGI("add head %lx %lx", client_id, ntohll(head.epoch));
-    return (size_t)(len + sizeof(head));
+    pad = get_random_data(sizeof(head.rand));
+    head.rand = *(uint32_t*)pad;
+
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(public_key, NULL);
+    EVP_PKEY_encrypt_init(ctx);
+
+    size_t outl = EVP_PKEY_get_size(public_key);
+    int rtn = EVP_PKEY_encrypt(ctx, (uint8_t*)(head_buf + len), &outl, 
+                               (uint8_t*)&head, (size_t)sizeof(session_head_t));
+    if (rtn <= 0) {
+        fprintf(stderr,"error: encrypt %d\n", rtn);
+        exit(-1);
+    }
+    len += outl;
+    EVP_PKEY_CTX_free(ctx);
+    return (size_t)len;
 }
 
 static size_t
@@ -1095,6 +1113,10 @@ init_remote_rands(remote_rands_t *rands)
     rands->data_len += rands->data_len < 64 ? 64 : 0;
     rands->pad_len  += rands->pad_len < 16 ? 16 : 0;
     rands->pad2_len += rands->pad2_len < 32 ? 32 : 0;
+
+    if (rands->traffic_pattern == 0) {
+        rands->traffic_pattern = 0x5ac2b7914d30e533;
+    }
 }
 
 static remote_t *
@@ -1656,6 +1678,28 @@ main(int argc, char **argv)
         if (no_delay == 0) {
             no_delay = conf->no_delay;
         }
+        if (conf->scramble_len) {
+            LOGI("scramble is set to %d", conf->scramble_len);
+            scramble_len = conf->scramble_len;
+        } else {
+            LOGI("scramble length not set.");
+        }
+
+        if (conf->public_key_file) {
+            FILE * fp = fopen(conf->public_key_file, "rb");
+            if (fp) {
+                //public_key = PEM_read_RSAPublicKey(fp, NULL, NULL, NULL);
+                public_key = PEM_read_PUBKEY(fp, NULL, NULL, NULL);
+                fclose(fp);
+            } else {
+                LOGE("file %s not found.", conf->public_key_file);
+            }
+        }
+        if (!public_key) {
+            LOGE("unable to read public key.");
+            exit(1);
+        }
+
 #ifdef HAVE_SETRLIMIT
         if (nofile == 0) {
             nofile = conf->nofile;
@@ -2039,6 +2083,11 @@ _start_ss_local_server(profile_t profile, ss_local_callback callback, void *udat
     sprintf(remote_port_str, "%d", remote_port);
 
     init_scramble_data();
+
+    if (!public_key) {
+        LOGE("unable to read public key.");
+        exit(1);
+    }
 
 #ifdef __MINGW32__
     winsock_init();

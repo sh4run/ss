@@ -91,6 +91,10 @@ typedef struct {
     char *acl;
     char *manager_address;
     char *ext_validate_rt;
+    int  scramble_len;
+    uint64_t client_id;
+    char *public_key_file;
+    char *private_key_file;
 } jconf_t;
 
 jconf_t *read_jconf(const char *file);
