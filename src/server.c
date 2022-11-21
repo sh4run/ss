@@ -515,7 +515,7 @@ report_addr(int fd, const char *info)
     if (peer_name != NULL) {
         LOGE("failed to handshake with %s: %s", peer_name, info);
         if (acl) {
-            acl_add_ip(peer_name);
+            //acl_add_ip(peer_name);
         }
     }
 
@@ -975,7 +975,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     ssize_t r;
     r = recv(server->fd, server->input_buf + server->recv_len,
              sizeof(server->input_buf) - server->recv_len, 0);
-    //LOGI("%s(server=%lx): %ld leftover=%d", __FUNCTION__, (uint64_t)server, r, server->recv_len);
+    if (verbose) {
+        LOGI("%s(server=%lx): %ld leftover=%d", 
+             __FUNCTION__, (uint64_t)server, r, server->recv_len);
+    }
     if (r == 0) {
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
@@ -1041,6 +1044,11 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         head.device_id = ntohll(head.device_id);
         head.epoch     = ntohll(head.epoch);
 
+        tlv_head = server->input_buf + scramble_len + inl + head.pad_tail_len;
+        if (tlv_head > &server->input_buf[server->recv_len - 2]) {
+            return;
+        }
+
         if (verbose) {
             LOGI("recv client id=%lx:%lx, epoch=%lx",
                 head.client_id,
@@ -1093,13 +1101,8 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         server->pad_type = head.pad_type;
         server->pad2_len = head.pad2_len;
 
-        tlv_head = server->input_buf + scramble_len + inl;
     } else {
         tlv_head = server->input_buf;
-    }
-
-    if (tlv_head > &server->input_buf[server->recv_len - 2]) {
-        return;
     }
 
     buf->len = buf->idx = 0;

@@ -328,30 +328,25 @@ server_handshake_reply(EV_P_ ev_io *w, int udp_assc, struct socks5_response *res
     } else
         memset(&sock_addr, 0, sizeof(sock_addr));
 
-    buffer_t resp_to_send;
-    buffer_t *resp_buf = &resp_to_send;
-    balloc(resp_buf, SOCKET_BUF_SIZE);
+    char output[64];
+    int len = 0;
 
-    memcpy(resp_buf->data, response, sizeof(struct socks5_response));
-    memcpy(resp_buf->data + sizeof(struct socks5_response),
-           &sock_addr.sin_addr, sizeof(sock_addr.sin_addr));
-    memcpy(resp_buf->data + sizeof(struct socks5_response) +
-           sizeof(sock_addr.sin_addr),
-           &sock_addr.sin_port, sizeof(sock_addr.sin_port));
+    memcpy(output, response, sizeof(struct socks5_response));
+    len += sizeof(struct socks5_response);
+    memcpy(output + len, &sock_addr.sin_addr, sizeof(sock_addr.sin_addr));
+    len += sizeof(sock_addr.sin_addr);
+    memcpy(output + len, &sock_addr.sin_port, sizeof(sock_addr.sin_port));
+    len += sizeof(sock_addr.sin_port);
 
-    int reply_size = sizeof(struct socks5_response) +
-                     sizeof(sock_addr.sin_addr) + sizeof(sock_addr.sin_port);
+    int s = send(server->fd, output, len,  0);
 
-    int s = send(server->fd, resp_buf->data, reply_size, 0);
-
-    bfree(resp_buf);
-
-    if (s < reply_size) {
+    if (s < len) {
         LOGE("failed to send fake reply");
         close_and_free_remote(EV_A_ remote);
         close_and_free_server(EV_A_ server);
         return -1;
     }
+
     if (udp_assc) {
         // Wait until client closes the connection
         return -1;
@@ -900,7 +895,6 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     int s = send(server->fd, server->buf->data, server->buf->len, 0);
-
     if (s == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             // no data, wait for send
@@ -934,8 +928,12 @@ init_remote_head(remote_t *remote, char *head_buf)
 {
     char *pad;
     int len = scramble_len;
-    pad = get_random_data(len);
+    uint8_t tail_len;
+
+    pad = get_random_data(len+1);
     memcpy(head_buf, pad, len);
+    tail_len = (uint8_t)pad[len];
+    tail_len = (tail_len & 0x3f) + 1;
 
     session_head_t head;
     head.device_id = htonll(device_id);
@@ -952,12 +950,10 @@ init_remote_head(remote_t *remote, char *head_buf)
     head.epoch += secs.tv_usec;
     head.epoch = htonll(head.epoch);
 
-    head.data_type = remote->rands.data_type;
-    head.pad_type = remote->rands.pad_type;
-    head.pad2_len = remote->rands.pad2_len;
-
-    pad = get_random_data(sizeof(head.rand));
-    head.rand = *(uint32_t*)pad;
+    head.data_type    = remote->rands.data_type;
+    head.pad_type     = remote->rands.pad_type;
+    head.pad2_len     = remote->rands.pad2_len;
+    head.pad_tail_len = tail_len;
 
     EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(public_key, NULL);
     EVP_PKEY_encrypt_init(ctx);
@@ -971,6 +967,12 @@ init_remote_head(remote_t *remote, char *head_buf)
     }
     len += outl;
     EVP_PKEY_CTX_free(ctx);
+
+    /* Add tail pad */
+    pad = get_random_data(tail_len);
+    memcpy(head_buf + len, pad, tail_len);
+    len += tail_len;
+
     return (size_t)len;
 }
 
@@ -981,6 +983,8 @@ remote_generate_output(remote_t *remote)
     size_t cp_len;
     char *pad;
     uint64_t bit;
+    int tlv_num = 0;
+    int complete = 0;
 
     if (!remote->buf->len) {
         return 0;
@@ -989,7 +993,14 @@ remote_generate_output(remote_t *remote)
         len = init_remote_head(remote, remote->output_data);
     }
 
-    while (len < REMOTE_OUTPUT_DATA_SZ - 256) {
+    if (remote->leftover_len) {
+        pad = get_random_data(remote->leftover_len);
+        memcpy(&remote->output_data[len], pad, remote->leftover_len);
+        len += remote->leftover_len;
+        remote->leftover_len = 0;
+    }
+
+    while (len < REMOTE_OUTPUT_DATA_SZ - 400) {
         bit = 1;
         bit <<= (remote->traffic_idx++ & 0x3f);
         if (bit & remote->rands.traffic_pattern) {
@@ -1006,9 +1017,14 @@ remote_generate_output(remote_t *remote)
                 len += cp_len;
                 pad = get_random_data(1);
                 remote->rands.data_len = pad[0];
-                remote->rands.data_len += remote->rands.data_len < 64 ? 64 : 0;
+                remote->rands.data_len += remote->rands.data_len < 16 ? 16 : 0;
             } else {
-                break;
+                if (tlv_num <= 2) {
+                    continue;
+                } else {
+                    complete = 1;
+                    break;
+                }
             }
         } else {
             /* pad */
@@ -1018,8 +1034,25 @@ remote_generate_output(remote_t *remote)
             memcpy(&remote->output_data[len], pad, remote->rands.pad_len);
             len += remote->rands.pad_len;
             remote->rands.pad_len = pad[remote->rands.pad_len];
-            remote->rands.pad_len += remote->rands.pad_len  < 16 ? 16 : 0;
+            remote->rands.pad_len += remote->rands.pad_len  < 24 ? 24 : 0;
         }
+        tlv_num++;
+    }
+
+    if (complete) {
+        /* 
+         * add a half pad tlv at the end to 
+         * protect the head of next packet. 
+         */
+        uint8_t tail_len = remote->rands.pad_len & 0x7f;
+        remote->output_data[len++] = remote->rands.pad_type;
+        remote->output_data[len++] = tail_len + tail_len;
+        pad = get_random_data(tail_len+1);
+        memcpy(&remote->output_data[len], pad, tail_len);
+        len += tail_len;
+        remote->leftover_len = tail_len;
+        remote->rands.pad_len = pad[tail_len];
+        remote->rands.pad_len += remote->rands.pad_len  < 24 ? 24 : 0;
     }
 
     remote->output_idx = 0;
@@ -1051,7 +1084,9 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
             }
         } else {
             // not connected
-            ERROR("getpeername");
+            if (verbose) {
+                ERROR("getpeername");
+            }
             close_and_free_remote(EV_A_ remote);
             close_and_free_server(EV_A_ server);
             return;
@@ -1069,6 +1104,10 @@ remote_send_cb(EV_P_ ev_io *w, int revents)
 
     ssize_t s = send(remote->fd, remote->output_data + remote->output_idx, 
                      remote->output_len, 0);
+
+    if (verbose) {
+        LOGI("%s: %ld %ld", __FUNCTION__, remote->output_len, s);
+    }
 
     if (s == -1) {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -1093,11 +1132,11 @@ init_remote_rands(remote_rands_t *rands)
     }
 
     rands->pad_type += rands->pad_type == rands->data_type ? 1 : 0;
-    rands->data_len += rands->data_len < 64 ? 64 : 0;
-    rands->pad_len  += rands->pad_len < 16 ? 16 : 0;
+    rands->data_len += rands->data_len < 16 ? 16 : 0;
+    rands->pad_len  += rands->pad_len < 24 ? 24 : 0;
     rands->pad2_len += rands->pad2_len < 32 ? 32 : 0;
 
-    if (rands->traffic_pattern == 0) {
+    if ((rands->traffic_pattern + 1) <= 1) {
         rands->traffic_pattern = 0x5ac2b7914d30e533;
     }
 }

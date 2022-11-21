@@ -90,7 +90,7 @@ typedef struct remote_rands {
     uint8_t  pad_type;
     uint8_t  pad_len;
 
-    uint8_t  pad2_len;  /* padding from remote to client */
+    uint8_t  pad2_len;  /* length of pad from remote to client */
 } remote_rands_t;
 
 #define REMOTE_OUTPUT_DATA_SZ   8192
@@ -116,6 +116,7 @@ typedef struct remote {
     char   output_data[REMOTE_OUTPUT_DATA_SZ];
     size_t output_len;
     size_t output_idx;
+    uint8_t leftover_len;
 } remote_t;
 
 #endif // _LOCAL_H
