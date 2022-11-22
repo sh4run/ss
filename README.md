@@ -1,5 +1,160 @@
 [Original Readme](https://github.com/sh4run/ss/tree/d3e73c6ce652168963cb10c8284c89f2cf4df16e#readme)
 
+# SSS - Scrambled Shadowsocks
+## Objective
+Tests show, with the help of [IP Geolocation Based Filtering](https://github.com/sh4run/ss/edit/master/README.md#ip-geolocation-based-filtering), when a new shadowsocks server comes online, GFW probes are received immediately after the first connection is initiated. This means GFW can identify shadowsocks precisely, not by any traffic measurement, or any mysterious big data analysis, but by some characteristics of shadowsocks itself.  More tests show very likely this characteristic is the length of the packets.
+
+The purpose of this modified protocol is to fix this problem while reusing existing shadowsocks code as much as possible. Following issues are to be addressed here:
+1. Variable or random packet length
+2. Secrecy
+3. Anti-replay
+4. Multi-client/device service
+
+## Protocol
+
+    Stream Format 
+
+    client --> Server
+    --------------------------------------------------------------------------
+    | Pad-1 | session header(encrypted) | Pad-tail | TLV-1 | TLV-2 ...
+    --------------------------------------------------------------------------                            
+
+    Server --> Client
+    --------------------------------------------------------------------------
+    | Pad-2 | Shadowsocks data ...
+    --------------------------------------------------------------------------
+
+    Pad-1
+    This is a piece of random data added at the beginning of each TCP
+    connection. The length of this piece is defined as scramble-x.
+
+    scramble-x
+    A shared constant between a server and its clients. Different servers can
+    choose different value.
+
+    Session header
+    Session header is encrypted by the RSA public key of the server. It is
+    defined as below:
+
+
+    typedef struct __attribute__((__packed__)) session_head {
+        uint64_t  client_id;    /* 
+                                 * Not used at this moment, same as 
+                                 * device_id.
+                                 */
+        uint64_t  device_id;    /*
+                                 * This is to differentiate the multiple
+                                 * devices used by one client.
+                                 */
+        uint64_t  epoch;        /* 
+                                 * EPOCH time at this device. 
+                                 * A server is always expecting a new
+                                 * connection from the same source with
+                                 * a greater epoch value.
+                                 */
+        uint8_t   data_type;    /*
+                                 * Data-type value used in the following 
+                                 * TLVs in this connection. 
+                                 */
+        uint8_t   pad_type;     /*
+                                 * Pad-type value used in the following 
+                                 * TLVs in this connection. 
+                                 */
+        uint8_t   pad2_len;     /* Length of Pad-2. */
+        uint8_t   pad_tail_len; /* Length of Pad-tail. */
+        uint32_t  reserve;      /* Not used. */
+    } session_head_t;
+
+    TLVs (Type-Length-Value)
+    There are two types: data and pad. The type values are specified in
+    session-header. These values are different in different connections. 
+    A client can choose to send out TLVs in random order with random length
+    of data or pad. 
+    The data here refers to the original shadowsocks data.
+    
+A typical config in scrambled shadowsocks includes:
+  - scramble-X 
+  - client-id (only at client side, not used at this moment)
+  - server public key or private key
+  - shadowsocks config
+                            
+## Build
+
+One extra package is needed: libsystemd-dev. SSS is based on openssl 3.0. You might need to update to ubuntu 22.04 to install libssl-dev 3.0.
+
+To install the new package: 
+
+    sudo apt install libsystemd-dev
+    
+If not installed yet, old packages can be installed by
+
+    sudo apt-get install build-essential autoconf libtool libssl-dev 
+    sudo apt-get install gawk debhelper  init-system-helpers pkg-config asciidoc xmlto 
+    sudo apt-get install apg libpcre3-dev zlib1g-dev libev-dev libudns-dev 
+    sudo apt-get install libsodium-dev libmbedtls-dev libc-ares-dev automake
+
+Create the view and build.
+
+    git clone https://github.com/sh4run/ss.git
+    cd ss
+    git submodule update --init
+    ./autogen.sh
+    ./configure LIBS="-lsystemd -lssl -lcrypto"
+    make
+
+If you want to use **IP Geolocation Based Filtering**, you still need to follow the instructions [here](https://github.com/sh4run/ss/edit/master/README.md#config-changes) .
+
+## Usage
+
+### Configuration
+
+So far only ss-local & ss-server are changed to support SSS. New configs are only supported in JSON config file. 
+
+An example config file at server side:
+
+    {
+        "server":["0.0.0.0"],
+        "server_port":3456 or whatever,
+        "password":"Your-Password",
+        "timeout":40,
+        "method":"aes-128-gcm or whatever",
+        "external_validation":"/Path/validate_ip_geo.sh",
+        "private_key":"/Path-to-PrivateKey/PrivateKey-file-in-PEM",
+        "scramble_length":123 recommand range 30~300
+    }
+
+An example config file at client side:
+
+    {
+        "server":["server-ip"],
+        "server_port":3456 or wahtever,
+        "password":"your-Password",
+        "timeout":40,
+        "method":"aes-128-gcm",
+        "local_port":5678(local socks port),
+        "local_address":"0.0.0.0",
+        "scramble_length":same as the number at server side,
+        "public_key":"/PATH/PublicKey-In-PEM"                                                               
+    }
+
+Generate your public/private key with:
+
+    ssh-keygen -b 1024 -m pem -f my-key
+    ssh-keygen -m pem -e -f my-key >my-key.pub.pem
+    
+Now your private key is "my-key" and public key is "my-key.pub.pem"
+
+### Deployment
+
+Run ss-server at your VPS server side and ss-local at your local ubuntu box. Run any socks5 client (v2rayng, SagerNet, Clash all support socks5) at your end device to connect to your local ubuntu box.
+
+## Test Results
+
+The first SSS server was online for 10 days with total 90G+ traffic (bidirectional at server side). It was stopped intentionally.
+* NO GFW probes were received in the first a couples of days. 
+* As traffic went up, some GFW probes were received in burst. 5~10 are probes were received in a short interval. Then it became quite for another two or three days. 
+
+The latest version of sss server has been online for 2 days with 3G bidirectional traffic. No GFW probes are received so far.  
 
 # IP Geolocation Based Filtering
 
