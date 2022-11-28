@@ -1,8 +1,8 @@
-[Original Readme](https://github.com/sh4run/ss/tree/d3e73c6ce652168963cb10c8284c89f2cf4df16e#readme)
+[Original Readme](https://github.com/sh4run/sss/tree/d3e73c6ce652168963cb10c8284c89f2cf4df16e#readme)
 
 # SSS - Scrambled Shadowsocks
 ## Objective
-Tests show, with the help of [IP Geolocation Based Filtering](https://github.com/sh4run/ss/edit/master/README.md#ip-geolocation-based-filtering), when a new shadowsocks server comes online, GFW probes are received immediately after the first connection is initiated. This means GFW can identify shadowsocks precisely, not by any traffic measurement, or any mysterious big data analysis, but by some characteristics of shadowsocks itself.  More tests show very likely this characteristic is the length of the packets.
+Tests show, with the help of [IP Geolocation Based Filtering](https://github.com/sh4run/sss/edit/master/README.md#ip-geolocation-based-filtering), when a new shadowsocks server comes online, GFW probes are received immediately after the first connection is initiated. This means GFW can identify shadowsocks precisely, not by any traffic measurement, or any mysterious big data analysis, but by some characteristics of shadowsocks itself.  More tests show very likely this characteristic is the length of the packets.
 
 The purpose of this modified protocol is to fix this problem while reusing existing shadowsocks code as much as possible. Following issues are to be addressed here:
 1. Variable or random packet length
@@ -95,14 +95,14 @@ If not installed yet, old packages can be installed by
 
 Create the view and build.
 
-    git clone https://github.com/sh4run/ss.git
-    cd ss
+    git clone https://github.com/sh4run/sss.git
+    cd sss
     git submodule update --init
     ./autogen.sh
     ./configure LIBS="-lsystemd -lssl -lcrypto"
     make
 
-If you want to use **IP Geolocation Based Filtering**, you still need to follow the instructions [here](https://github.com/sh4run/ss/edit/master/README.md#config-changes) .
+If you want to use **IP Geolocation Based Filtering**, you still need to follow the instructions [here](https://github.com/sh4run/sss/edit/master/README.md#config-changes) .
 
 ## Usage
 
@@ -120,7 +120,7 @@ An example config file at server side:
         "method":"aes-128-gcm or whatever",
         "external_validation":"/Path/validate_ip_geo.sh",
         "private_key":"/Path-to-PrivateKey/PrivateKey-file-in-PEM",
-        "scramble_length":123 recommand range 30~300
+        "scramble_length":123(recommended range 20~300)
     }
 
 An example config file at client side:
@@ -137,6 +137,7 @@ An example config file at client side:
         "public_key":"/PATH/PublicKey-In-PEM"                                                               
     }
 
+In sss. aead is no longer that important. You can choose any other faster encryption method as well. 
 Generate your public/private key with:
 
     ssh-keygen -b 1024 -m pem -f my-key
@@ -154,7 +155,8 @@ The first SSS server was online for 10 days with total 90G+ traffic (bidirection
 * NO GFW probes were received in the first a couples of days. 
 * As traffic went up, some GFW probes were received in burst. 5~10 are probes were received in a short interval. Then it became quite for another two or three days. 
 
-The latest version of sss server has been online for 2 days with 3G bidirectional traffic. No GFW probes are received so far.  
+The latest version of sss server has been online for 7 days with 30G bidirectional traffic. 
+* 7 GFW probes were receivedi so far. 5 of them were received on day 3 and day 4.
 
 # IP Geolocation Based Filtering
 

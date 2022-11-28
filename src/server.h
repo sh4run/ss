@@ -107,9 +107,11 @@ typedef struct server {
     uint8_t   data_type;
     uint8_t   pad_type;
     uint8_t   pad2_len;
-    uint8_t   pad;
+    uint8_t   reserve;
 
     uint8_t input_buf[SERVER_INPUTBUF_SZ];
+    uint8_t leftover[128];
+    int     leftover_len;
 } server_t;
 
 typedef struct query {

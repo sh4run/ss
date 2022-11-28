@@ -1002,8 +1002,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
     }
 
     if (server->stage == STAGE_STOP) {
-        if (!server->pad)
-        dump_buffer(server->input_buf + server->recv_len, r);
+        LOGI("received %ld bytes from stopped %s", r, server->peer_name);
         return;
     }
 
@@ -1091,7 +1090,6 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                  server->peer_name,
                  server->client->last_epoch, head.epoch, 
                  server->client->last_epoch - head.epoch);
-            server->pad = 1;
             stop_server(EV_A_ server);
             return;
         }
@@ -1169,6 +1167,21 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         }
         return;
     } else if (server->stage == STAGE_INIT) {
+        if (server->leftover_len) {
+            char *tmp = ss_malloc(server->buf->len);
+            if (!tmp) {
+                LOGE("Not enough memory(%ld)", server->buf->len);
+                stop_server(EV_A_ server);
+                return;
+            }
+            memcpy(tmp, server->buf->data, server->buf->len);
+            memcpy(server->buf->data, server->leftover, server->leftover_len);
+            memcpy(server->buf->data + server->leftover_len, 
+                   tmp, server->buf->len);
+            server->buf->len += server->leftover_len;
+            server->leftover_len = 0;
+            ss_free(tmp);
+        }
         /*
          * Shadowsocks TCP Relay Header:
          *
@@ -1202,9 +1215,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                           host, INET_ADDRSTRLEN);
                 offset += in_addr_len;
             } else {
-                report_addr(server->fd, "invalid length for ipv4 address");
-                stop_server(EV_A_ server);
-                return;
+                goto incomplete_addr;
             }
             memcpy(&addr->sin_port, server->buf->data + offset, sizeof(uint16_t));
             info.ai_family   = AF_INET;
@@ -1219,9 +1230,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 memcpy(host, server->buf->data + offset + 1, name_len);
                 offset += name_len + 1;
             } else {
-                report_addr(server->fd, "invalid host name length");
-                stop_server(EV_A_ server);
-                return;
+                goto incomplete_addr;
             }
             if (acl && outbound_block_match_host(host) == 1) {
                 if (verbose)
@@ -1252,9 +1261,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 }
             } else {
                 if (!validate_hostname(host, name_len)) {
-                    report_addr(server->fd, "invalid host name");
-                    stop_server(EV_A_ server);
-                    return;
+                    goto incomplete_addr;
                 }
                 need_query = 1;
             }
@@ -1269,10 +1276,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                           host, INET6_ADDRSTRLEN);
                 offset += in6_addr_len;
             } else {
-                LOGE("invalid header with addr type %d", atyp);
-                report_addr(server->fd, "invalid length for ipv6 address");
-                stop_server(EV_A_ server);
-                return;
+                goto incomplete_addr;
             }
             memcpy(&addr->sin6_port, server->buf->data + offset, sizeof(uint16_t));
             info.ai_family   = AF_INET6;
@@ -1293,9 +1297,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         offset += 2;
 
         if (server->buf->len < offset) {
-            report_addr(server->fd, "invalid request length");
-            stop_server(EV_A_ server);
-            return;
+            goto incomplete_addr;
         } else {
             server->buf->len -= offset;
             server->buf->idx = offset;
@@ -1351,8 +1353,16 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
 
         return;
     }
-    // should not reach here
-    FATAL("server context error");
+
+incomplete_addr:
+    LOGI("incomplete msg received.");
+    if (server->buf->len < sizeof(server->leftover)) {
+        memcpy(server->leftover, server->buf->data, server->buf->len);
+        server->leftover_len = server->buf->len;
+    } else {
+        LOGE("Too much leftover data(%ld)", server->buf->len);
+        stop_server(EV_A_ server);
+    }
 }
 
 static void
