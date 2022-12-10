@@ -617,7 +617,7 @@ server_stream(EV_P_ ev_io *w, buffer_t *buf)
     }
 
     // insert shadowsocks header
-    if (!remote->direct) {
+    if (!remote->direct && remote->buf->len) {
 #ifdef __ANDROID__
         tx += remote->buf->len;
 #endif
@@ -936,6 +936,8 @@ init_remote_head(remote_t *remote, char *head_buf)
     tail_len = (tail_len & 0x3f) + 1;
 
     session_head_t head;
+    head.major_version = MAJOR_VER;
+    head.minor_version = MINOR_VER;
     head.device_id = htonll(device_id);
     if (client_id) {
         head.client_id = htonll(client_id);

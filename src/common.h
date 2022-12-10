@@ -80,15 +80,20 @@ enum {
 
 #define PAD_MAX_LEN  255
 
+#define MAJOR_VER    0
+#define MINOR_VER    1
+
 typedef struct __attribute__((__packed__)) session_head {
-    uint64_t  client_id;
-    uint64_t  device_id;
-    uint64_t  epoch;
+    uint8_t   major_version;
+    uint8_t   minor_version;
     uint8_t   data_type;
     uint8_t   pad_type;
     uint8_t   pad2_len;
     uint8_t   pad_tail_len;
-    uint32_t  reserve;
+    uint16_t  reserve;
+    uint64_t  client_id;
+    uint64_t  device_id;
+    uint64_t  epoch;
 } session_head_t;
 
 #define SCRAMBLE_X    167

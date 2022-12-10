@@ -11,6 +11,20 @@ The purpose of this modified protocol is to fix this problem while reusing exist
 4. Multi-client/device service
 
 ## Protocol
+SSS changes orginal SS stream format in both upstream and downsteam. Most changes are in upstream. 
+
+Upstream changes:
+1. Divides original SS upstream data into multiple pieces, each piece in a random length.
+2. Mixes those pieces into multiple segments of random bytes. In another words, SS data is split into pieces and mixed into a stream of random bytes. This is the reason it is called scrambled shadowsocks.
+3. Each TCP connection has its own mixing scheme.
+4. An encrypted header is added to instruct its peer how to decode.
+5. This encrypted header is padded with random bytes at both head and tail. An outside observer is difficult to locate the actual content.
+
+Downstream Changes:
+1. A piece of random bytes is prepended. 
+
+With these changes, SSS is trying to make its frame have no obvious pattern (either length or content). So that it would be difficult to use any existing pattern match to detect SSS.
+
 
     Stream Format 
 
@@ -33,37 +47,11 @@ The purpose of this modified protocol is to fix this problem while reusing exist
     choose different value.
 
     Session header
-    Session header is encrypted by the RSA public key of the server. It is
-    defined as below:
+    Session header is encrypted by the RSA public key of the server. It includes:
+    - Length of Pad-tail & Pad-2.
+    - Type values used in TLV.
+    - Epoch
 
-
-    typedef struct __attribute__((__packed__)) session_head {
-        uint64_t  client_id;    /* 
-                                 * Not used at this moment, same as 
-                                 * device_id.
-                                 */
-        uint64_t  device_id;    /*
-                                 * This is to differentiate the multiple
-                                 * devices used by one client.
-                                 */
-        uint64_t  epoch;        /* 
-                                 * EPOCH time at this device. 
-                                 * A server is always expecting a new
-                                 * connection from the same source with
-                                 * a greater epoch value.
-                                 */
-        uint8_t   data_type;    /*
-                                 * Data-type value used in the following 
-                                 * TLVs in this connection. 
-                                 */
-        uint8_t   pad_type;     /*
-                                 * Pad-type value used in the following 
-                                 * TLVs in this connection. 
-                                 */
-        uint8_t   pad2_len;     /* Length of Pad-2. */
-        uint8_t   pad_tail_len; /* Length of Pad-tail. */
-        uint32_t  reserve;      /* Not used. */
-    } session_head_t;
 
     TLVs (Type-Length-Value)
     There are two types: data and pad. The type values are specified in

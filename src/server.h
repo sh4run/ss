@@ -100,7 +100,7 @@ typedef struct server {
 #ifdef USE_NFCONNTRACK_TOS
     struct dscptracker *tracker;
 #endif
-    char peer_name[32];
+    char peer_name[INET6_ADDRSTRLEN+10];
     client_info_t *client;
     int  recv_len;
 

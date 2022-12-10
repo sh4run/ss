@@ -278,21 +278,28 @@ free_connections(struct ev_loop *loop)
 }
 
 static char *
-get_peer_name(int fd)
+get_peer_name(int fd, int full)
 {
-    static char peer_name[INET6_ADDRSTRLEN] = { 0 };
+    static char peer_name[INET6_ADDRSTRLEN+10];
     struct sockaddr_storage addr;
+    int l;
+    in_port_t port = 0;
     socklen_t len = sizeof(struct sockaddr_storage);
-    memset(&addr, 0, len);
-    memset(peer_name, 0, INET6_ADDRSTRLEN);
     int err = getpeername(fd, (struct sockaddr *)&addr, &len);
     if (err == 0) {
+        peer_name[0] = 0;
         if (addr.ss_family == AF_INET) {
             struct sockaddr_in *s = (struct sockaddr_in *)&addr;
             inet_ntop(AF_INET, &s->sin_addr, peer_name, INET_ADDRSTRLEN);
+            port = s->sin_port;
         } else if (addr.ss_family == AF_INET6) {
             struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
             inet_ntop(AF_INET6, &s->sin6_addr, peer_name, INET6_ADDRSTRLEN);
+            port = s->sin6_port;
+        }
+        if (full) {
+            l = strlen(peer_name);
+            snprintf(peer_name + l, sizeof(peer_name) - l, ":%d", port);
         }
     } else {
         return NULL;
@@ -511,7 +518,7 @@ static void
 report_addr(int fd, const char *info)
 {
     char *peer_name;
-    peer_name = get_peer_name(fd);
+    peer_name = get_peer_name(fd, 1);
     if (peer_name != NULL) {
         LOGE("failed to handshake with %s: %s", peer_name, info);
         if (acl) {
@@ -991,7 +998,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             return;
         }
         if (verbose) {
-            char output[64];
+            char output[80];
             snprintf(output, sizeof(output)-1, "server(%s) recv",
                      server->peer_name);
             ERROR(output);
@@ -1039,6 +1046,13 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             return;
         }
 
+        if (head.major_version != MAJOR_VER || 
+            head.minor_version != MINOR_VER) {
+            LOGE("unsupported version(%d:%d) received.", 
+                 head.major_version, head.minor_version);
+            stop_server(EV_A_ server);
+            return;
+        }
         head.client_id = ntohll(head.client_id);
         head.device_id = ntohll(head.device_id);
         head.epoch     = ntohll(head.epoch);
@@ -1167,6 +1181,10 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         }
         return;
     } else if (server->stage == STAGE_INIT) {
+        if (!server->buf->len) {
+            LOGI("Null segment received.");
+            return;
+        }
         if (server->leftover_len) {
             char *tmp = ss_malloc(server->buf->len);
             if (!tmp) {
@@ -1532,7 +1550,7 @@ remote_recv_cb(EV_P_ ev_io *w, int revents)
             return;
         } else {
             if (verbose) {
-                char output[64];
+                char output[80];
                 snprintf(output, sizeof(output)-1,
                          "remote(%s) recv", server->peer_name);
                 ERROR(output);
@@ -1941,7 +1959,7 @@ accept_cb(EV_P_ ev_io *w, int revents)
         return;
     }
 
-    char *peer_name = get_peer_name(serverfd);
+    char *peer_name = get_peer_name(serverfd, 0);
     if (peer_name != NULL) {
         if (acl) {
             acl_mode = get_acl_mode();
@@ -2013,7 +2031,8 @@ accept_cb(EV_P_ ev_io *w, int revents)
     /*
      * save the peer info for logging purpose.
      */
-    strncpy(server->peer_name, peer_name, sizeof(server->peer_name) - 1);
+    strncpy(server->peer_name, get_peer_name(serverfd, 1), 
+            sizeof(server->peer_name) - 1);
 
     if (failed) {
         /* stop server to silently drop any packet */
