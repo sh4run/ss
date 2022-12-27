@@ -98,9 +98,16 @@ If you want to use **IP Geolocation Based Filtering**, you still need to follow 
 
 ### Configuration
 
-So far only ss-local & ss-server are changed to support SSS. New configs are only supported in JSON config file. 
+Generate your public/private key with:
 
-An example config file at server side:
+    ssh-keygen -b 1024 -m pem -f my-key
+    ssh-keygen -m pem -e -f my-key >my-key.pub.pem
+    
+Now your private key is "my-key" and public key is "my-key.pub.pem".
+
+**Only ss-local & ss-server are changed to support SSS. New configs are only supported in JSON config file.**
+
+An example config file at server side (server.json):
 
     {
         "server":["0.0.0.0"],
@@ -113,7 +120,7 @@ An example config file at server side:
         "scramble_length":123(recommended range 20~300)
     }
 
-An example config file at client side:
+An example config file at client side (local.json):
 
     {
         "server":["server-ip"],
@@ -127,17 +134,14 @@ An example config file at client side:
         "public_key":"/PATH/PublicKey-In-PEM"                                                               
     }
 
-In sss. aead is no longer that important. You can choose any other faster encryption method as well. 
-Generate your public/private key with:
-
-    ssh-keygen -b 1024 -m pem -f my-key
-    ssh-keygen -m pem -e -f my-key >my-key.pub.pem
-    
-Now your private key is "my-key" and public key is "my-key.pub.pem"
+In sss. **aead is no longer so important.** You can choose any other faster encryption method as well. 
 
 ### Deployment
 
-Run ss-server at your VPS server side and ss-local at your local ubuntu box. Run any socks5 client (v2rayng, SagerNet, Clash all support socks5) at your end device to connect to your local ubuntu box.
+Two ubuntu boxes are required to deploy SSS: one public server outside firewall, and another private server inside firewall as a first level proxy. As ss-local doesn't provide any authentication/encryption at this moment, it is recommended to use a machine in your private(home) network as the second box. 
+* Run ss-server at your public server(VPS): **ss-server -c server.json**
+* Run ss-local at your local ubuntu box: **ss-local -c local.json** 
+* Run any socks5 client (v2rayng/SagerNet/Clash/Shadowrocket all support socks5) at your end device to connect to your local ubuntu box.
 
 ## Test Results
 
