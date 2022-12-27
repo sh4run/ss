@@ -1,3 +1,5 @@
+**Feel free to open an issue if you see any when using/compiling sss.**
+
 [Original Readme](https://github.com/sh4run/sss/tree/d3e73c6ce652168963cb10c8284c89f2cf4df16e#readme)
 
 # SSS - Scrambled Shadowsocks
@@ -81,7 +83,7 @@ If not installed yet, old packages can be installed by
     sudo apt-get install apg libpcre3-dev zlib1g-dev libev-dev libudns-dev 
     sudo apt-get install libsodium-dev libmbedtls-dev libc-ares-dev automake
 
-Create the view and build.
+Create a view and build. The results are under subdir "src".
 
     git clone https://github.com/sh4run/sss.git
     cd sss
@@ -90,7 +92,7 @@ Create the view and build.
     ./configure LIBS="-lsystemd -lssl -lcrypto"
     make
 
-If you want to use **IP Geolocation Based Filtering**, you still need to follow the instructions [here](https://github.com/sh4run/sss/edit/master/README.md#config-changes) .
+If you want to use **IP Geolocation Based Filtering**, you still need to follow the instructions [here](https://github.com/sh4run/sss#ip-geolocation-based-filtering) .
 
 ## Usage
 
