@@ -2,7 +2,7 @@
 
 # SSS - Scrambled Shadowsocks
 ## Objective
-Tests show, with the help of [IP Geolocation Based Filtering](https://github.com/sh4run/sss/edit/master/README.md#ip-geolocation-based-filtering), when a new shadowsocks server comes online, GFW probes are received immediately after the first connection is initiated. This means GFW can identify shadowsocks precisely, not by any traffic measurement, or any mysterious big data analysis, but by some characteristics of shadowsocks itself.  More tests show very likely this characteristic is the length of the packets.
+Tests show, with the help of [IP Geolocation Based Filtering](https://github.com/sh4run/sss#ip-geolocation-based-filtering), when a new shadowsocks server comes online, GFW probes are received immediately after the first connection is initiated. This means GFW can identify shadowsocks precisely, not by any traffic measurement, or any mysterious big data analysis, but by some characteristics of shadowsocks itself.  More tests show very likely this characteristic is the length of the packets.
 
 The purpose of this modified protocol is to fix this problem while reusing existing shadowsocks code as much as possible. Following issues are to be addressed here:
 1. Variable or random packet length

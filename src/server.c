@@ -2002,6 +2002,15 @@ accept_cb(EV_P_ ev_io *w, int revents)
                 }
             }
         }
+    } else {
+        close(serverfd);
+        return;
+    }
+
+    peer_name = get_peer_name(serverfd, 1);
+    if (peer_name == NULL) {
+        close(serverfd);
+        return;
     }
 
     int opt = 1;
@@ -2031,7 +2040,7 @@ accept_cb(EV_P_ ev_io *w, int revents)
     /*
      * save the peer info for logging purpose.
      */
-    strncpy(server->peer_name, get_peer_name(serverfd, 1), 
+    strncpy(server->peer_name, peer_name,
             sizeof(server->peer_name) - 1);
 
     if (failed) {
