@@ -89,7 +89,7 @@ Create a view and build. The results are under subdir "src".
     cd sss
     git submodule update --init
     ./autogen.sh
-    ./configure LIBS="-lsystemd -lssl -lcrypto"
+    ./configure
     make
 
 If you want to use **IP Geolocation Based Filtering**, you still need to follow the instructions [here](https://github.com/sh4run/sss#ip-geolocation-based-filtering) .
