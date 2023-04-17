@@ -10,8 +10,8 @@ AC_CONFIG_MACRO_DIR([m4])
 AC_USE_SYSTEM_EXTENSIONS
 
 AM_INIT_AUTOMAKE([subdir-objects foreign -Wno-gnu -Werror])
-m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
-m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
+dnl m4_ifdef([AM_PROG_AR], [AM_PROG_AR])
+dnl m4_ifdef([AM_SILENT_RULES], [AM_SILENT_RULES([yes])])
 AM_MAINTAINER_MODE
 AM_DEP_TRACK
 
@@ -42,7 +42,7 @@ AC_ARG_ENABLE([documentation],
   AS_HELP_STRING([--disable-documentation], [do not build documentation]),
   [disable_documentation=true],
   [disable_documentation=false])
-AM_CONDITIONAL([ENABLE_DOCUMENTATION], [test x$disable_documentation = xfalse])
+AM_CONDITIONAL([ENABLE_DOCUMENTATION], [test x$disable_documentation = xtrue])
 
 AM_COND_IF([ENABLE_DOCUMENTATION], [
   AC_PATH_PROG([ASCIIDOC], [asciidoc])
@@ -90,11 +90,11 @@ dnl Checks for host.
 AC_MSG_CHECKING(for what kind of host)
 case $host in
   *-linux*)
-    os_support=linux
+dnl    os_support=linux
     AC_MSG_RESULT(Linux)
     ;;
   *-mingw*)
-    os_support=mingw
+dnl    os_support=mingw
     AC_MSG_RESULT(MinGW)
     ;;
   *)
@@ -233,8 +233,6 @@ AC_ARG_WITH(ev,
    CPPFLAGS="$CPPFLAGS -I$withval/include"
    LDFLAGS="$LDFLAGS -L$withval/lib"]
 )
-AC_CHECK_HEADERS([ev.h libev/ev.h], [], [])
-AC_CHECK_LIB([ev], [ev_loop_destroy], [LIBS="-lev $LIBS"], [AC_MSG_ERROR([Couldn't find libev. Try installing libev-dev@<:@el@:>@.])])
 
 AC_CONFIG_FILES([shadowsocks-libev.pc
                  Makefile
