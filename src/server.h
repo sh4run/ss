@@ -77,6 +77,8 @@ typedef struct client_info {
     uint64_t  client_id;
     uint64_t  device_id;
     uint64_t  last_epoch;
+    uint64_t  last_server_epoch;
+    struct sockaddr_storage client_addr;
 } client_info_t;
 
 #define SERVER_INPUTBUF_SZ   8192

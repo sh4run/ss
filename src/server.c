@@ -26,6 +26,7 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <locale.h>
 #include <signal.h>
@@ -161,7 +162,9 @@ static int scramble_len = SCRAMBLE_X;
 
 static EVP_PKEY *private_key = NULL;
 
-#define  EPOCH_MARGIN   50000
+#define  EPOCH_MARGIN    30000
+#define  IDLE_MARGIN     100000
+#define  ROAMING_MARGIN  200000
 
 #ifndef __MINGW32__
 ev_timer stat_update_watcher;
@@ -277,6 +280,31 @@ free_connections(struct ev_loop *loop)
     }
 }
 
+static int sockaddr_to_string(struct sockaddr *addr,
+                              char *peer_name,
+                              in_port_t *port)
+{
+    if (!addr || !peer_name) {
+        return -1;
+    }
+
+    peer_name[0] = 0;
+    if (addr->sa_family == AF_INET) {
+        struct sockaddr_in *s = (struct sockaddr_in *)addr;
+        inet_ntop(AF_INET, &s->sin_addr, peer_name, INET_ADDRSTRLEN);
+        if (port) {
+            *port = s->sin_port;
+        }
+    } else if (addr->sa_family == AF_INET6) {
+        struct sockaddr_in6 *s = (struct sockaddr_in6 *)addr;
+        inet_ntop(AF_INET6, &s->sin6_addr, peer_name, INET6_ADDRSTRLEN);
+        if (port) {
+            *port = s->sin6_port;
+        }
+    }
+    return 0;
+}
+
 static char *
 get_peer_name(int fd, int full)
 {
@@ -287,16 +315,7 @@ get_peer_name(int fd, int full)
     socklen_t len = sizeof(struct sockaddr_storage);
     int err = getpeername(fd, (struct sockaddr *)&addr, &len);
     if (err == 0) {
-        peer_name[0] = 0;
-        if (addr.ss_family == AF_INET) {
-            struct sockaddr_in *s = (struct sockaddr_in *)&addr;
-            inet_ntop(AF_INET, &s->sin_addr, peer_name, INET_ADDRSTRLEN);
-            port = s->sin_port;
-        } else if (addr.ss_family == AF_INET6) {
-            struct sockaddr_in6 *s = (struct sockaddr_in6 *)&addr;
-            inet_ntop(AF_INET6, &s->sin6_addr, peer_name, INET6_ADDRSTRLEN);
-            port = s->sin6_port;
-        }
+        sockaddr_to_string((struct sockaddr *)&addr, peer_name, &port);
         if (full) {
             l = strlen(peer_name);
             snprintf(peer_name + l, sizeof(peer_name) - l, ":%d", port);
@@ -1032,7 +1051,7 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         if (out) {
             if (EVP_PKEY_decrypt(ctx, out, &outl,
                                  (uint8_t*)(server->input_buf + scramble_len),
-                                 inl) == 1) {
+                                 inl) > 0) {
                 memcpy(&head, out, sizeof(session_head_t));
                 error = 0;
             }
@@ -1069,7 +1088,17 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
                 head.epoch);
         }
 
-        int i, unused = -1;
+        struct sockaddr_storage addr;
+        socklen_t addr_len = sizeof(struct sockaddr_storage);
+        memset(&addr, 0, addr_len);
+
+        if (getpeername(server->fd, (struct sockaddr *)&addr, &addr_len) != 0) {
+            LOGE("Error in getpeername");
+            stop_server(EV_A_ server);
+            return;
+        }
+
+        int i, unused = -1, new_client = 0;
         for (i = 0; i < MAX_CLIENT_NUM; i++) {
             if (!clients[i].client_id) {
                 unused = i;
@@ -1090,17 +1119,24 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             clients[unused].client_id = head.client_id;
             clients[unused].device_id = head.device_id;
             clients[unused].last_epoch = EPOCH_MARGIN;
+            clients[unused].last_server_epoch = 0;
+            memcpy(&clients[unused].client_addr, &addr, sizeof(addr));
             server->client = &clients[unused];
+            new_client = 1;
         }
 
         /*
-         * It has been observed that a slightly later connection
-         * may arrive earlier. Leave a EPOCH_MARGIN us margin here.
+         * It is likely different connections are classified into
+         * different flow or queues by the routers in the path.
+         * Due to different depth and latency of different queues,
+         * earlier connections may arrive later. Therefore we have a 
+         * EPOCH_MARGIN here. Any connections late less than this 
+         * margin are allowed.
          * TODO: make this margin a configurable parameter.
          */
+
         if ((server->client->last_epoch - EPOCH_MARGIN) >= head.epoch) {
-            /* anti replay */
-            LOGE("Obsolete Epoch from %s: last=%lx curr=%lx diff=%ld",
+            LOGE("Obsolete timestamp from %s: exp=%lx rcv=%lx diff=%ld",
                  server->peer_name,
                  server->client->last_epoch, head.epoch, 
                  server->client->last_epoch - head.epoch);
@@ -1108,7 +1144,88 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
             return;
         }
 
+        /*
+         * get server local epoch
+         */
+        uint64_t epoch;
+        struct timeval secs;
+        gettimeofday(&secs, NULL);
+        epoch = secs.tv_sec;
+        epoch <<= 20;
+        epoch += secs.tv_usec;
+
+        /*
+         * last_server_epoch keeps the server timestamp when last 
+         * connection is received. If server receives no connection in
+         * IDLE_MARGIN, any new connection must have a new(greater)
+         * EPOCH.
+         */
+        if (server->client->last_server_epoch + IDLE_MARGIN < epoch) {
+            if (head.epoch <= server->client->last_epoch) {
+                LOGE("Obsolete timestamp after idle. Src: %s, Epoch:%lx",
+                     server->peer_name, head.epoch);
+                stop_server(EV_A_ server);
+                return;
+            }
+        }
+
+        if (!new_client) {
+            /*
+             * If a packet is replayed, it likely has a different src. 
+             */
+            int addr_change = 1;
+            if (server->client->client_addr.ss_family == addr.ss_family) {
+                if (addr.ss_family == AF_INET) {
+                    struct sockaddr_in *in_addr1;
+                    struct sockaddr_in *in_addr2;
+                    in_addr1 =
+                        (struct sockaddr_in *)&server->client->client_addr;
+                    in_addr2 = (struct sockaddr_in *)&addr;
+                    if (!memcmp(&in_addr1->sin_addr, &in_addr2->sin_addr,
+                                sizeof(struct in_addr))) {
+                        addr_change = 0;
+                    }
+                } else {
+                    struct sockaddr_in6 *in_addr1;
+                    struct sockaddr_in6 *in_addr2;
+                    in_addr1 =
+                        (struct sockaddr_in6 *)&server->client->client_addr;
+                    in_addr2 = (struct sockaddr_in6 *)&addr;
+                    if (!memcmp(&in_addr1->sin6_addr, &in_addr2->sin6_addr,
+                                sizeof(struct in6_addr))) {
+                        addr_change = 0;
+                    }
+                }
+            }
+
+            if (addr_change) {
+                char addr_name1[INET6_ADDRSTRLEN];
+                char addr_name2[INET6_ADDRSTRLEN];
+                sockaddr_to_string((struct sockaddr *)&server->client->client_addr, 
+                                   addr_name1, NULL);
+                sockaddr_to_string((struct sockaddr *)&addr, addr_name2, NULL);
+                LOGE("Client addr change(%s=>%s) detected", 
+                     addr_name1, addr_name2);
+
+                int pass = 0;
+                if ((head.epoch - ROAMING_MARGIN) > server->client->last_epoch) {
+                    pass = 1;
+                }
+                LOGE("Timestamp: exp=%lx rcv=%lx. %s",
+                     server->client->last_epoch, head.epoch,
+                     pass ? "Allowed" : "Denied");
+                if (!pass) {
+                    stop_server(EV_A_ server);
+                    return;
+                } else {
+                    /* update client addr */
+                    memcpy(&server->client->client_addr, &addr, sizeof(addr));
+                }
+            }
+        }
+
         server->client->last_epoch = head.epoch;
+        server->client->last_server_epoch = epoch;
         server->data_type = head.data_type;
         server->pad_type = head.pad_type;
         server->pad2_len = head.pad2_len;
