@@ -2,6 +2,8 @@
 
 [Original Readme](https://github.com/sh4run/sss/tree/d3e73c6ce652168963cb10c8284c89f2cf4df16e#readme)
 
+[A fast installation script](https://github.com/sh4run/scripts-configs#sssscrambled-shadowsocks-installation)
+
 # SSS - Scrambled Shadowsocks
 ## Objective
 Tests show, with the help of [IP Geolocation Based Filtering](https://github.com/sh4run/sss#ip-geolocation-based-filtering), when a new shadowsocks server comes online, GFW probes are received immediately after the first connection is initiated. This means GFW can identify shadowsocks precisely, not by any traffic measurement, or any mysterious big data analysis, but by some characteristics of shadowsocks itself.  More tests show very likely this characteristic is the length of the packets.
@@ -105,7 +107,7 @@ Generate your public/private key with:
     
 Now your private key is "my-key" and public key is "my-key.pub.pem".
 
-**Only ss-local & ss-server are changed to support SSS. New configs are only supported in JSON config file.**
+**New configs are only supported in JSON config file.**
 
 An example config file at server side (server.json):
 
@@ -139,8 +141,8 @@ In sss. **aead is no longer so important.** You can choose any other faster encr
 ### Deployment
 
 Two ubuntu boxes are required to deploy SSS: one public server outside firewall, and another private server inside firewall as a first level proxy. As ss-local doesn't provide any authentication/encryption at this moment, it is recommended to use a machine in your private(home) network as the second box. 
-* Run ss-server at your public server(VPS): **ss-server -c server.json**
-* Run ss-local at your local ubuntu box: **ss-local -c local.json** 
+* Run sss-server at your public server(VPS): **sss-server -c server.json**
+* Run sss-local at your local ubuntu box: **sss-local -c local.json** 
 * Run any socks5 client (v2rayng/SagerNet/Clash/Shadowrocket all support socks5) at your end device to connect to your local ubuntu box.
 
 ## Test Results
@@ -149,8 +151,7 @@ The first SSS server was online for 10 days with total 90G+ traffic (bidirection
 * NO GFW probes were received in the first a couples of days. 
 * As traffic went up, some GFW probes were received in burst. 5~10 are probes were received in a short interval. Then it became quite for another two or three days. 
 
-The latest version of sss server has been online for 7 days with 30G bidirectional traffic. 
-* 7 GFW probes were receivedi so far. 5 of them were received on day 3 and day 4.
+The latest version of sss server has been online for 4 months+ with 2T+ bidirectional traffic. It is still working now.
 
 # IP Geolocation Based Filtering
 
