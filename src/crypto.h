@@ -157,4 +157,8 @@ extern struct cache *nonce_cache;
 extern const char *supported_stream_ciphers[];
 extern const char *supported_aead_ciphers[];
 
+#ifndef _NO_BLOOM_
+#define _NO_BLOOM_
+#endif
+
 #endif // _CRYPTO_H

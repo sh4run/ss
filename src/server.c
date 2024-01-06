@@ -1126,11 +1126,11 @@ server_recv_cb(EV_P_ ev_io *w, int revents)
         }
 
         /*
-         * It is likely different connections are classified into
-         * different flow or queues by the routers in the path.
+         * It is possible different connections are classified into
+         * different flows or queues by the routers in the path.
          * Due to different depth and latency of different queues,
          * earlier connections may arrive later. Therefore we have a 
-         * EPOCH_MARGIN here. Any connections late less than this 
+         * EPOCH_MARGIN here. Following connections within this 
          * margin are allowed.
          * TODO: make this margin a configurable parameter.
          */
@@ -2468,7 +2468,7 @@ main(int argc, char **argv)
             }
         }
         if (conf->scramble_len) {
-            LOGI("prepend scramble length is set to %d", conf->scramble_len);
+            LOGI("Scramble length is set to %d", conf->scramble_len);
             scramble_len = conf->scramble_len;
         }
         if (conf->private_key_file) {

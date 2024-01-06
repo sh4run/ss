@@ -41,7 +41,11 @@
 #include "stream.h"
 #include "aead.h"
 #include "utils.h"
+
+#define _NO_BLOOM_
+#ifndef _NO_BLOOM_
 #include "ppbloom.h"
+#endif
 
 int
 balloc(buffer_t *ptr, size_t capacity)
@@ -142,11 +146,13 @@ crypto_init(const char *password, const char *key, const char *method)
         FATAL("Failed to initialize sodium");
     }
 
+#ifndef _NO_BLOOM_
     // Initialize NONCE bloom filter
 #ifdef MODULE_REMOTE
     ppbloom_init(BF_NUM_ENTRIES_FOR_SERVER, BF_ERROR_RATE_FOR_SERVER);
 #else
     ppbloom_init(BF_NUM_ENTRIES_FOR_CLIENT, BF_ERROR_RATE_FOR_CLIENT);
+#endif
 #endif
 
     if (method != NULL) {

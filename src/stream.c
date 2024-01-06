@@ -31,9 +31,12 @@
 
 #include <sodium.h>
 
-#include "ppbloom.h"
 #include "stream.h"
 #include "utils.h"
+
+#ifndef _NO_BLOOM_
+#include "ppbloom.h"
+#endif
 
 #define SODIUM_BLOCK_SIZE   64
 
@@ -345,8 +348,10 @@ stream_encrypt_all(buffer_t *plaintext, cipher_t *cipher, size_t capacity)
     cipher_ctx_set_nonce(&cipher_ctx, nonce, nonce_len, 1);
     memcpy(ciphertext->data, nonce, nonce_len);
 
+#ifndef _NO_BLOOM_
 #ifdef MODULE_REMOTE
     ppbloom_add((void *)nonce, nonce_len);
+#endif
 #endif
 
     if (cipher->method >= SALSA20) {
@@ -371,8 +376,9 @@ stream_encrypt_all(buffer_t *plaintext, cipher_t *cipher, size_t capacity)
     dump("NONCE", ciphertext->data, nonce_len);
 #endif
 
-    brealloc(plaintext, nonce_len + ciphertext->len, capacity);
-    memcpy(plaintext->data, ciphertext->data, nonce_len + ciphertext->len);
+    buffer_t t = tmp;
+    tmp = *plaintext;
+    *plaintext = t;
     plaintext->len = nonce_len + ciphertext->len;
 
     return CRYPTO_OK;
@@ -404,8 +410,10 @@ stream_encrypt(buffer_t *plaintext, cipher_ctx_t *cipher_ctx, size_t capacity)
         cipher_ctx->counter = 0;
         cipher_ctx->init    = 1;
 
+#ifndef _NO_BLOOM_
 #ifdef MODULE_REMOTE
         ppbloom_add((void *)cipher_ctx->nonce, nonce_len);
+#endif
 #endif
     }
 
@@ -443,8 +451,9 @@ stream_encrypt(buffer_t *plaintext, cipher_ctx_t *cipher_ctx, size_t capacity)
     dump("CIPHER", ciphertext->data + nonce_len, ciphertext->len);
 #endif
 
-    brealloc(plaintext, nonce_len + ciphertext->len, capacity);
-    memcpy(plaintext->data, ciphertext->data, nonce_len + ciphertext->len);
+    buffer_t t = tmp;
+    tmp = *plaintext;
+    *plaintext = t;
     plaintext->len = nonce_len + ciphertext->len;
 
     return CRYPTO_OK;
@@ -471,10 +480,12 @@ stream_decrypt_all(buffer_t *ciphertext, cipher_t *cipher, size_t capacity)
     uint8_t *nonce = cipher_ctx.nonce;
     memcpy(nonce, ciphertext->data, nonce_len);
 
+#ifndef _NO_BLOOM_
     if (ppbloom_check((void *)nonce, nonce_len) == 1) {
         LOGE("crypto: stream: repeat IV detected");
         return CRYPTO_ERROR;
     }
+#endif
 
     cipher_ctx_set_nonce(&cipher_ctx, nonce, nonce_len, 0);
 
@@ -500,11 +511,13 @@ stream_decrypt_all(buffer_t *ciphertext, cipher_t *cipher, size_t capacity)
     dump("NONCE", ciphertext->data, nonce_len);
 #endif
 
+#ifndef _NO_BLOOM_
     ppbloom_add((void *)nonce, nonce_len);
+#endif
 
-    brealloc(ciphertext, plaintext->len, capacity);
-    memcpy(ciphertext->data, plaintext->data, plaintext->len);
-    ciphertext->len = plaintext->len;
+    buffer_t t = tmp;
+    tmp = *ciphertext;
+    *ciphertext = t;
 
     return CRYPTO_OK;
 }
@@ -555,12 +568,14 @@ stream_decrypt(buffer_t *ciphertext, cipher_ctx_t *cipher_ctx, size_t capacity)
         cipher_ctx->counter = 0;
         cipher_ctx->init    = 1;
 
+#ifndef _NO_BLOOM_
         if (cipher->method >= RC4_MD5) {
             if (ppbloom_check((void *)nonce, nonce_len) == 1) {
                 LOGE("crypto: stream: repeat IV detected");
                 return CRYPTO_ERROR;
             }
         }
+#endif
     }
 
     if (ciphertext->len <= 0)
@@ -603,18 +618,20 @@ stream_decrypt(buffer_t *ciphertext, cipher_ctx_t *cipher_ctx, size_t capacity)
     // Add to bloom filter
     if (cipher_ctx->init == 1) {
         if (cipher->method >= RC4_MD5) {
+#ifndef _NO_BLOOM_
             if (ppbloom_check((void *)cipher_ctx->nonce, cipher->nonce_len) == 1) {
                 LOGE("crypto: stream: repeat IV detected");
                 return CRYPTO_ERROR;
             }
             ppbloom_add((void *)cipher_ctx->nonce, cipher->nonce_len);
+#endif
             cipher_ctx->init = 2;
         }
     }
 
-    brealloc(ciphertext, plaintext->len, capacity);
-    memcpy(ciphertext->data, plaintext->data, plaintext->len);
-    ciphertext->len = plaintext->len;
+    buffer_t t = tmp;
+    tmp = *ciphertext;
+    *ciphertext = t;
 
     return CRYPTO_OK;
 }
@@ -622,7 +639,7 @@ stream_decrypt(buffer_t *ciphertext, cipher_ctx_t *cipher_ctx, size_t capacity)
 void
 stream_ctx_init(cipher_t *cipher, cipher_ctx_t *cipher_ctx, int enc)
 {
-    sodium_memzero(cipher_ctx, sizeof(cipher_ctx_t));
+    memset(cipher_ctx, 0, sizeof(cipher_ctx_t));
     stream_cipher_ctx_init(cipher_ctx, cipher->method, enc);
     cipher_ctx->cipher = cipher;
 
