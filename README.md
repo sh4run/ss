@@ -1,3 +1,9 @@
+**[Amoeba](https://github.com/sh4run/amoeba)**
+
+**A proxy derived from SSS(scrambled shadowsocks) with a brand new architecture and a enhanced protocol.**
+
+----
+
 **Feel free to open an issue if you see any when using/compiling sss.**
 
 [Original Readme](https://github.com/sh4run/sss/tree/d3e73c6ce652168963cb10c8284c89f2cf4df16e#readme)
